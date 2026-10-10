@@ -42,6 +42,9 @@ struct Case {
     expect: Vec<String>,
 }
 
+/// A whole-page tool's results: URL → (milliseconds, markdown or `None` on failure).
+type PageResults = HashMap<String, (f64, Option<String>)>;
+
 /// One tool's result for one case.
 #[derive(Clone, Copy, Default)]
 struct Run {
@@ -65,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
     let mut urls: Vec<&String> = cases.iter().flat_map(|c| &c.urls).collect();
     urls.sort();
     urls.dedup();
-    let mut tools: Vec<(&str, HashMap<String, (f64, Option<String>)>)> = Vec::new();
+    let mut tools: Vec<(&str, PageResults)> = Vec::new();
     if let Some(key) = &firecrawl_key {
         for (name, fresh) in [("firecrawl", false), ("firecrawl-fresh", true)] {
             let mut results = HashMap::new();
@@ -120,7 +123,11 @@ async fn main() -> anyhow::Result<()> {
     for n in &names {
         print!(" | {n:>22}");
     }
-    println!("\n{:<24}{}", "", " |     ms  tokens answer".repeat(names.len()));
+    println!(
+        "\n{:<24}{}",
+        "",
+        " |     ms  tokens answer".repeat(names.len())
+    );
     for (case, row) in cases.iter().zip(&runs) {
         print!("{:<24}", case.name);
         for r in row {
@@ -152,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// A whole-page tool's result for a case: slowest URL, all markdown together.
-fn whole_page_run(case: &Case, results: &HashMap<String, (f64, Option<String>)>) -> Run {
+fn whole_page_run(case: &Case, results: &PageResults) -> Run {
     let mut run = Run::default();
     let mut text = String::new();
     for url in &case.urls {
@@ -185,7 +192,10 @@ async fn firecrawl(client: &Client, key: &str, url: &str, fresh: bool) -> Option
         .ok()?;
     let md = resp.pointer("/data/markdown").and_then(Value::as_str);
     if md.is_none() {
-        eprintln!("firecrawl {url} (fresh: {fresh}): {}", resp.get("error").unwrap_or(&resp));
+        eprintln!(
+            "firecrawl {url} (fresh: {fresh}): {}",
+            resp.get("error").unwrap_or(&resp)
+        );
     }
     md.map(String::from)
 }
