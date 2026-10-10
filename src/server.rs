@@ -4,8 +4,12 @@ use rmcp::{
     model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig},
     tool, tool_handler, tool_router,
 };
+use spider::reqwest::Client;
 
-use crate::tools::fetch::{self, FetchParams};
+use crate::{
+    fetcher,
+    tools::fetch::{self, FetchParams},
+};
 
 const INSTRUCTIONS: &str = "Fast web reader. Pass a query to get only the relevant passages \
 instead of whole pages, and batch several URLs into one call.";
@@ -14,14 +18,16 @@ instead of whole pages, and batch several URLs into one call.";
 pub struct WebShooter {
     #[allow(dead_code, reason = "read by the tool_handler macro")]
     tool_router: ToolRouter<Self>,
+    client: Client,
 }
 
 #[tool_router]
 impl WebShooter {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> anyhow::Result<Self> {
+        Ok(Self {
             tool_router: Self::tool_router(),
-        }
+            client: fetcher::build_client()?,
+        })
     }
 
     #[tool(
@@ -31,7 +37,7 @@ impl WebShooter {
         &self,
         Parameters(params): Parameters<FetchParams>,
     ) -> Result<CallToolResult, McpError> {
-        let text = fetch::run(params).await;
+        let text = fetch::run(&self.client, params).await;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }
