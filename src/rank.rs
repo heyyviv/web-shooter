@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{LazyLock, Mutex},
 };
 
@@ -44,7 +44,7 @@ pub fn terms(text: &str) -> Vec<String> {
 }
 
 /// The text a chunk is scored on: its headings plus its body, without link URLs.
-fn scoring_text(chunk: &Chunk) -> String {
+pub fn scoring_text(chunk: &Chunk) -> String {
     format!(
         "{}\n{}",
         chunk.heading_path,
@@ -217,6 +217,35 @@ pub fn hybrid(
     }
 }
 
+/// Relevance of each text to the query on a fixed 0..1 scale, so scores from
+/// different pages can be compared (unlike `hybrid`, which is normalised per
+/// call). The share of query terms the text contains, averaged with the
+/// embedding cosine when a model is available.
+pub fn absolute(query: &str, texts: &[String], model: Option<&StaticModel>) -> Vec<f32> {
+    let mut query_terms = terms(query);
+    query_terms.sort();
+    query_terms.dedup();
+    let overlap: Vec<f32> = texts
+        .iter()
+        .map(|t| {
+            if query_terms.is_empty() {
+                return 0.0;
+            }
+            let doc: HashSet<String> = terms(t).into_iter().collect();
+            query_terms.iter().filter(|q| doc.contains(*q)).count() as f32
+                / query_terms.len() as f32
+        })
+        .collect();
+    let Some(model) = model else {
+        return overlap;
+    };
+    embed::similarities(model, query, texts)
+        .into_iter()
+        .zip(overlap)
+        .map(|(cos, o)| (cos.max(0.0) + o) / 2.0)
+        .collect()
+}
+
 /// Scale scores to 0..1 over the call; all zeros if they are all equal.
 fn min_max(scores: &[f32]) -> Vec<f32> {
     let lo = scores.iter().copied().fold(f32::INFINITY, f32::min);
@@ -282,6 +311,15 @@ mod tests {
         assert_eq!(
             hybrid("install", &chunks, None, fusion),
             bm25("install", &chunks)
+        );
+    }
+
+    #[test]
+    fn absolute_without_model_is_query_term_share() {
+        let texts = ["rust engineer jobs".to_string(), "pricing".to_string()];
+        assert_eq!(
+            absolute("rust jobs in berlin", &texts, None),
+            vec![2.0 / 3.0, 0.0]
         );
     }
 

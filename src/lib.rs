@@ -2,6 +2,7 @@ pub mod chunk;
 pub mod embed;
 pub mod extract;
 pub mod fetcher;
+pub mod links;
 pub mod models;
 pub mod pack;
 pub mod rank;

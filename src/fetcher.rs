@@ -2,10 +2,13 @@ use std::time::Duration;
 
 use spider::{page::Page, reqwest::Client};
 
+/// Sent with every request and matched against robots.txt rules.
+pub const USER_AGENT: &str = concat!("web-shooter/", env!("CARGO_PKG_VERSION"));
+
 /// Shared HTTP client: one connection pool for every tool call.
 pub fn build_client() -> anyhow::Result<Client> {
     Ok(Client::builder()
-        .user_agent(concat!("web-shooter/", env!("CARGO_PKG_VERSION")))
+        .user_agent(USER_AGENT)
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(20))
         .build()?)

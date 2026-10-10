@@ -1,17 +1,34 @@
-use crate::chunk::{Chunk, outline};
+use crate::{
+    chunk::{Chunk, outline},
+    links::Link,
+};
 
 /// Rough token count: about 4 characters per token for English text.
 pub fn estimate_tokens(s: &str) -> usize {
     s.len().div_ceil(4)
 }
 
-/// One page's result, ready to be packed into the tool output.
+/// One fetched page: its markdown and links, or an error.
+#[derive(Default)]
 pub struct PageOut {
     pub url: String,
     pub title: Option<String>,
     /// Markdown body, or an error message when `ok` is false.
     pub body: String,
     pub ok: bool,
+    pub links: Vec<Link>,
+    /// The URL the page declares as its canonical one, if any.
+    pub canonical: Option<String>,
+}
+
+impl PageOut {
+    pub fn error(url: String, message: impl Into<String>) -> Self {
+        Self {
+            url,
+            body: message.into(),
+            ..Self::default()
+        }
+    }
 }
 
 /// Fit all pages into `max_tokens`. Each page gets a fair share; budget a
@@ -209,9 +226,9 @@ mod tests {
     fn page(body: &str) -> PageOut {
         PageOut {
             url: "https://example.com".into(),
-            title: None,
             body: body.into(),
             ok: true,
+            ..PageOut::default()
         }
     }
 

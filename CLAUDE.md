@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Milestones M0–M4 are done. `fetch` downloads many URLs concurrently and converts them to markdown. Without a query it fits whole pages to the token budget. With `query`/`keywords` it returns passages ranked by BM25 fused with static embeddings, and with `precise: true` it also reranks them with a cross-encoder. Next is M5 (SQLite cache). Milestones are listed under "Plan" below.
+Milestones M0–M4 and M6 are done. Three tools:
+- `fetch` downloads many URLs concurrently and converts them to markdown. Without a query it fits whole pages to the token budget. With `query`/`keywords` it returns passages ranked by BM25 fused with static embeddings, and with `precise: true` it also reranks them with a cross-encoder.
+- `links` lists a page's links, ranked by a query if given.
+- `crawl` does a best-first crawl from a start page and returns the most relevant pages as URLs with one-line snippets.
+
+Next is M7 (benchmark against Firecrawl and Jina). Milestones are listed under "Plan" below.
 
 ## Commands
 
@@ -22,9 +27,11 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 - `src/server.rs`: `WebShooter`, the MCP handler. It holds the shared HTTP client. Every tool is registered in its `#[tool_router]` impl, which delegates to `src/tools/`.
 - `src/tools/<name>.rs`: each tool's parameter struct (doc comments become the JSON schema the LLM sees, so keep them short) and its `run` function.
 - `src/fetcher.rs`: the HTTP client (via `spider::reqwest`) and single-page fetch through `spider::page::Page::new_page`.
-- `src/extract.rs`: HTML → markdown. It reads the title, JSON-LD and `__NEXT_DATA__` in one `lol_html` pass, converts with `spider_transformations`, then cleans up the result in `tidy`.
+- `src/extract.rs`: HTML → markdown. It reads the title, canonical URL, JSON-LD, `__NEXT_DATA__` and links in one `lol_html` pass, converts with `spider_transformations`, then cleans up the result in `tidy`.
+- `src/links.rs`: `Link` (URL, anchor text, heading above it), URL normalisation and filtering, same-site checks.
+- `src/tools/links.rs`, `src/tools/crawl.rs`: the `links` and `crawl` tools. `crawl` keeps a `BinaryHeap` frontier; a link's priority is 0.7 × its own text score + 0.3 × the relevance of the page it was found on, both from `rank::absolute`.
 - `src/chunk.rs`: splits markdown into ~200-token chunks at headings, each with its heading path. Skips back-matter sections (References, Notes, External links…).
-- `src/rank.rs`: tokenizer (stopwords, Snowball stemming, hyphen joining), BM25 over all chunks in the call, and `hybrid`, which fuses BM25 with embedding similarity. `RankConfig::default()` holds the tuned fusion and cut-off.
+- `src/rank.rs`: tokenizer (stopwords, Snowball stemming, hyphen joining), BM25 over all chunks in the call, and `hybrid`, which fuses BM25 with embedding similarity. `absolute` gives scores on a fixed 0..1 scale (query-term share averaged with cosine), for comparing links and pages across a crawl; `hybrid` is normalised per call, so it can't be used for that. `RankConfig::default()` holds the tuned fusion and cut-off.
 - `src/embed.rs`: `Embedder` loads the `model2vec` static embedding model once in the background (started in `main`). The first query waits for it. If it can't load, ranking falls back to BM25.
 - `src/rerank.rs`: `Reranker` wraps the `fastembed` cross-encoder (Jina v2 base). It is not preloaded; it loads on the first `precise` call.
 - `src/models.rs`: `ModelSet`, the models a server owns. `ready(precise)` hands ranking the reranker only for `precise` calls.
@@ -42,7 +49,11 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 - `fastembed` is built with `default-features = false` and rustls features. Its default cache is `./.fastembed_cache` relative to the working directory, so `rerank.rs` points it at the Hugging Face cache.
 - The reranker is opt-in (`precise: true`), not on by default as first planned. On the eval it didn't beat embeddings at ranking (top 13/15 vs 14/15) and adds ~300 ms, though it cuts tokens by ~33%. Jina v1 turbo was faster but worse (top 8/15); BGE base was slower and worse. Its model is ~1.1 GB.
 - Fusion is a min-max-normalised weighted sum, not RRF as first planned. RRF ranked as well in the eval, but its flat scores defeat the relative cut-off, so replies filled the budget.
-- `fetch` does not check robots.txt: it reads pages the client asked for by URL, like a browser. `crawl` (M6) will respect robots.txt.
+- `fetch` and `links` do not check robots.txt: they read pages the client asked for by URL, like a browser. `crawl` checks robots.txt for every page it discovers (not the start page), using `spider::packages::robotparser::parser::RobotFileParser` with `fetcher::USER_AGENT`.
+- `crawl` limits: 4 concurrent fetches, 30 s, `max_pages` (default 30, max 200), `max_depth` (default 3), same site unless `other_sites`. It stops early after 12 pages in a row that don't enter the top results.
+- `crawl` leaves "thin" pages (less than 15% of their letters and digits outside links: indexes, link lists, Wikipedia's "What links here") out of the results but still follows their links. Duplicates are dropped by canonical URL, then by content hash.
+- Markdown links can contain parentheses in the URL (`…/Search_engine_(computing)`); `crawl.rs`'s `MD_LINK` allows one level. The simpler `[^)]*` pattern elsewhere cuts such URLs short.
+- Text from separate text nodes is joined with a space (`extract::push_text`) so `<span>Title</span><span>London</span>` doesn't become "TitleLondon".
 
 ## Goal
 
@@ -61,8 +72,8 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 - **No LLM inside the server.** The client LLM supplies starting URLs and queries; there is no built-in web search tool. Token cost is what the tools return, so results are ranked passages or URL/title/snippet lists, never whole pages unless asked.
 - **Tools (v1 draft):**
   - `fetch(urls[], query?, keywords?, max_tokens?, precise?)`: relevant passages from one or many pages.
-  - `crawl(start_url, query, keywords?, max_pages?, depth?)`: focused crawl that returns a ranked URL list.
-  - `links(url, query?)`: a page's links, ranked.
+  - `crawl(url, query, keywords?, max_pages?, max_depth?, other_sites?, max_results?)`: focused crawl that returns a ranked URL list with snippets.
+  - `links(url, query?, keywords?, max_links?)`: a page's links, ranked.
 - **Pipeline:**
   1. **Fetch:** plain HTTP first.
   2. **Extract:** read embedded JSON first (`__NEXT_DATA__`, JSON-LD). Otherwise extract the main content and convert it to markdown. If the result is empty, fall back to headless Chrome.
@@ -87,10 +98,13 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 | M2 | Chunking, BM25 and packing: `fetch` with `query` returns only matching passages (done) |
 | M3 | Static embeddings (`model2vec-rs`) fused with BM25, models downloaded on first run (done; weighted fusion instead of RRF) |
 | M4 | Cross-encoder reranker (`fastembed`) (done; opt-in via `precise`, not on by default) |
-| M5 | SQLite cache (`rusqlite`) with ETag |
-| M6 | `links` and `crawl` tools with the scored frontier and early stop |
-| M7 | Test set and Firecrawl benchmark, then tuning |
+| M6 | `links` and `crawl` tools with the scored frontier and early stop (done) |
+| M7 | Benchmark against Firecrawl and Jina, held-out test cases, then tuning (next) |
+| M8 | PDF support (research papers) |
+| M5 | SQLite cache (`rusqlite`) with ETag (moved after M8: it only speeds up repeat fetches) |
 | v2 | Headless Chrome fallback |
+
+The order changed after M4. The user is now trying the server in real tasks (registered at user scope with `claude mcp add --scope user web-shooter`). Turn their real queries into eval cases.
 
 Build the test set gradually from M2 onwards so each ranking change is measured.
 

@@ -9,11 +9,17 @@ use spider::reqwest::Client;
 use crate::{
     fetcher,
     models::ModelSet,
-    tools::fetch::{self, FetchParams},
+    tools::{
+        crawl::{self, CrawlParams},
+        fetch::{self, FetchParams},
+        links::{self, LinksParams},
+    },
 };
 
-const INSTRUCTIONS: &str = "Fast web reader. Pass a query to get only the relevant passages \
-instead of whole pages, and batch several URLs into one call.";
+const INSTRUCTIONS: &str = "Fast web reader and focused crawler. `fetch` reads pages you \
+already have URLs for (pass a query to get only the relevant passages, and batch URLs). \
+`links` lists a page's links ranked by a query. `crawl` explores a site from a start page \
+and returns the most relevant pages as URLs with snippets; then `fetch` the ones you need.";
 
 #[derive(Clone)]
 pub struct WebShooter {
@@ -46,6 +52,28 @@ impl WebShooter {
         Parameters(params): Parameters<FetchParams>,
     ) -> Result<CallToolResult, McpError> {
         let text = fetch::run(&self.client, &self.models, params).await;
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "List a page's links. With `query`, ranks them by relevance so you can pick which to fetch."
+    )]
+    async fn links(
+        &self,
+        Parameters(params): Parameters<LinksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let text = links::run(&self.client, &self.models, params).await;
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Crawl a site from a start page, following the links most relevant to `query` first. Returns the best pages as URLs with one-line snippets (not full text); `fetch` them for details. Respects robots.txt."
+    )]
+    async fn crawl(
+        &self,
+        Parameters(params): Parameters<CrawlParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let text = crawl::run(&self.client, &self.models, params).await;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }

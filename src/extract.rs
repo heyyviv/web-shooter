@@ -8,6 +8,8 @@ use spider_transformations::transformation::content::{
     ReturnFormat, TransformConfig, TransformInput, transform_content_input,
 };
 
+use crate::links::{self, Link};
+
 /// Below this many characters of visible text, the page is treated as an
 /// empty client-side shell and embedded page data is used instead.
 const EMPTY_SHELL_CHARS: usize = 200;
@@ -31,6 +33,10 @@ const SKIP_LD_TYPES: &[&str] = &[
 pub struct Extracted {
     pub title: Option<String>,
     pub markdown: String,
+    /// Every readable link on the page, in document order.
+    pub links: Vec<Link>,
+    /// The page's `<link rel="canonical">`, resolved, if it has one.
+    pub canonical: Option<String>,
 }
 
 /// Turn raw HTML into compact markdown: main content, plus JSON-LD facts,
@@ -79,6 +85,19 @@ pub fn extract(url: &str, body: &[u8]) -> Extracted {
     Extracted {
         title: embedded.title.filter(|t| !t.is_empty()),
         markdown: markdown.trim().to_string(),
+        canonical: embedded
+            .canonical
+            .and_then(|href| links::normalize(parsed.as_ref(), &href)),
+        links: links::resolve(
+            parsed.as_ref(),
+            embedded
+                .links
+                .into_iter()
+                .map(|(href, text, heading)| {
+                    (href, decode_entities(&text), decode_entities(&heading))
+                })
+                .collect(),
+        ),
     }
 }
 
@@ -87,10 +106,13 @@ struct Embedded {
     title: Option<String>,
     json_ld: Vec<String>,
     next_data: Option<String>,
+    /// `(href, anchor text, heading above)` before resolving.
+    links: Vec<(String, String, String)>,
+    canonical: Option<String>,
 }
 
-/// One streaming pass that pulls the title and embedded JSON out of the HTML
-/// and returns the HTML without MathML. Formulas otherwise convert to one
+/// One streaming pass that pulls the title, embedded JSON and links out of
+/// the HTML and returns the HTML without MathML. Formulas otherwise convert to one
 /// character per line; the LaTeX fallback that sites like Wikipedia include
 /// next to the MathML is kept.
 fn scan(body: &[u8]) -> (Embedded, Vec<u8>) {
@@ -98,6 +120,7 @@ fn scan(body: &[u8]) -> (Embedded, Vec<u8>) {
     let title = Rc::new(RefCell::new(String::new()));
     let ld_buf = Rc::new(RefCell::new(String::new()));
     let next_buf = Rc::new(RefCell::new(String::new()));
+    let heading = Rc::new(RefCell::new(String::new()));
     let mut html = Vec::with_capacity(body.len());
 
     let mut rewriter = HtmlRewriter::new(
@@ -106,6 +129,49 @@ fn scan(body: &[u8]) -> (Embedded, Vec<u8>) {
                 element!("math", |el| {
                     el.remove();
                     Ok(())
+                }),
+                element!("h1, h2, h3, h4, h5, h6", {
+                    let heading = heading.clone();
+                    move |_| {
+                        heading.borrow_mut().clear();
+                        Ok(())
+                    }
+                }),
+                text!("h1, h2, h3, h4, h5, h6", {
+                    let heading = heading.clone();
+                    move |t| {
+                        push_text(&mut heading.borrow_mut(), t);
+                        Ok(())
+                    }
+                }),
+                element!("a[href]", {
+                    let (found, heading) = (found.clone(), heading.clone());
+                    move |el| {
+                        if let Some(href) = el.get_attribute("href") {
+                            let heading = heading.borrow().clone();
+                            found
+                                .borrow_mut()
+                                .links
+                                .push((href, String::new(), heading));
+                        }
+                        Ok(())
+                    }
+                }),
+                text!("a[href]", {
+                    let found = found.clone();
+                    move |t| {
+                        if let Some(link) = found.borrow_mut().links.last_mut() {
+                            push_text(&mut link.1, t);
+                        }
+                        Ok(())
+                    }
+                }),
+                element!(r#"link[rel="canonical"][href]"#, {
+                    let found = found.clone();
+                    move |el| {
+                        found.borrow_mut().canonical = el.get_attribute("href");
+                        Ok(())
+                    }
                 }),
                 text!("head > title", {
                     let title = title.clone();
@@ -257,9 +323,7 @@ fn tidy(markdown: &str) -> String {
     let s = CITATION.replace_all(&s, "");
     let s = EDIT_LINK.replace_all(&s, "");
     let s = FRAGMENT_LINK.replace_all(&s, "$1");
-    let s = ENTITY.replace_all(&s, |c: &regex::Captures| {
-        decode_entity(&c[1]).unwrap_or_else(|| c[0].to_string())
-    });
+    let s = decode_entities(&s);
 
     let mut out: Vec<String> = Vec::new();
     let mut in_code = false;
@@ -309,6 +373,23 @@ fn clean_code_line(line: &str) -> String {
         out.push(c);
     }
     out
+}
+
+/// Append a text chunk, separating text nodes with a space: adjacent inline
+/// elements (`<span>Title</span><span>London</span>`) would otherwise run together.
+fn push_text(buf: &mut String, chunk: &lol_html::html_content::TextChunk) {
+    buf.push_str(chunk.as_str());
+    if chunk.last_in_text_node() {
+        buf.push(' ');
+    }
+}
+
+fn decode_entities(s: &str) -> String {
+    ENTITY
+        .replace_all(s, |c: &regex::Captures| {
+            decode_entity(&c[1]).unwrap_or_else(|| c[0].to_string())
+        })
+        .into_owned()
 }
 
 fn decode_entity(name: &str) -> Option<String> {
@@ -384,6 +465,39 @@ mod tests {
         assert_eq!(
             json_ld_facts(&v),
             vec!["**JobPosting**: hiringOrganization.name: Acme · title: Rust Engineer"]
+        );
+    }
+
+    #[test]
+    fn canonical_url_is_resolved() {
+        let html = br#"<html><head><link rel="canonical" href="/wiki/Web_page"></head><body>x</body></html>"#;
+        let e = extract("https://en.wikipedia.org/wiki/Web_pages", html);
+        assert_eq!(
+            e.canonical.as_deref(),
+            Some("https://en.wikipedia.org/wiki/Web_page")
+        );
+    }
+
+    #[test]
+    fn links_carry_anchor_text_and_heading() {
+        let html = br#"<html><body><h2>Open <em>roles</em></h2>
+            <a href="/jobs/1"><span>Rust</span> engineer<span>Berlin &amp; remote</span></a>
+            <h3>Other</h3><a href="https://x.org/">X</a></body></html>"#;
+        let links = extract("https://acme.com/careers", html).links;
+        let got: Vec<(&str, &str, &str)> = links
+            .iter()
+            .map(|l| (l.url.as_str(), l.text.as_str(), l.heading.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "https://acme.com/jobs/1",
+                    "Rust engineer Berlin & remote",
+                    "Open roles"
+                ),
+                ("https://x.org/", "X", "Other"),
+            ]
         );
     }
 

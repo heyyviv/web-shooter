@@ -10,6 +10,7 @@ use crate::{
     models::ModelSet,
     pack::{PageOut, pack, pack_passages},
     rank::{self, Models, RankConfig},
+    tools::query_text,
 };
 
 /// Default token budget for one `fetch` call.
@@ -66,12 +67,8 @@ pub fn respond(
     config: RankConfig,
 ) -> String {
     let max_tokens = params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-    let query = [
-        params.query.clone().unwrap_or_default(),
-        params.keywords.clone().unwrap_or_default().join(" "),
-    ]
-    .join(" ");
-    if query.trim().is_empty() {
+    let query = query_text(params.query.as_deref(), params.keywords.as_deref());
+    if query.is_empty() {
         return pack(pages, max_tokens);
     }
 
@@ -94,12 +91,7 @@ pub fn respond(
 pub async fn fetch_one(client: &Client, url: &str) -> PageOut {
     let fetched = fetcher::fetch(client, url).await;
     if !(200..300).contains(&fetched.status) {
-        return PageOut {
-            url: fetched.url,
-            title: None,
-            body: format!("HTTP {}", fetched.status),
-            ok: false,
-        };
+        return PageOut::error(fetched.url, format!("HTTP {}", fetched.status));
     }
     // Extraction is CPU-bound; keep it off the async worker threads.
     let url = fetched.url.clone();
@@ -115,18 +107,10 @@ pub fn page_out(url: String, extracted: Option<crate::extract::Extracted>) -> Pa
             title: e.title,
             body: e.markdown,
             ok: true,
+            links: e.links,
+            canonical: e.canonical,
         },
-        Some(_) => PageOut {
-            url,
-            title: None,
-            body: "no readable content (the page may need JavaScript)".into(),
-            ok: false,
-        },
-        None => PageOut {
-            url,
-            title: None,
-            body: "extraction failed".into(),
-            ok: false,
-        },
+        Some(_) => PageOut::error(url, "no readable content (the page may need JavaScript)"),
+        None => PageOut::error(url, "extraction failed"),
     }
 }
