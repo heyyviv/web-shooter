@@ -1,14 +1,16 @@
 use futures::{StreamExt, stream};
+use model2vec_rs::model::StaticModel;
 use rmcp::schemars;
 use serde::Deserialize;
 use spider::reqwest::Client;
 
 use crate::{
     chunk::{Chunk, chunk},
+    embed::Embedder,
     extract::extract,
     fetcher,
     pack::{PageOut, pack, pack_passages},
-    rank,
+    rank::{self, RankConfig},
 };
 
 /// Default token budget for one `fetch` call.
@@ -29,18 +31,33 @@ pub struct FetchParams {
     pub max_tokens: Option<usize>,
 }
 
-pub async fn run(client: &Client, params: FetchParams) -> String {
+pub async fn run(client: &Client, embedder: &Embedder, params: FetchParams) -> String {
     let pages: Vec<PageOut> = stream::iter(params.urls.clone())
         .map(|url| async move { fetch_one(client, &url).await })
         .buffered(CONCURRENCY)
         .collect()
         .await;
-    respond(&pages, &params)
+    if params.query.is_some() || params.keywords.is_some() {
+        // Wait for the model so the first query isn't ranked by BM25 alone.
+        embedder.get().await;
+    }
+    // Ranking is CPU-bound; keep it off the async worker threads.
+    let embedder = embedder.clone();
+    tokio::task::spawn_blocking(move || {
+        respond(&pages, &params, embedder.ready(), RankConfig::default())
+    })
+    .await
+    .unwrap_or_else(|e| format!("error: ranking failed: {e}"))
 }
 
 /// Build the tool output from already-fetched pages: whole pages without a
 /// query, ranked passages with one.
-pub fn respond(pages: &[PageOut], params: &FetchParams) -> String {
+pub fn respond(
+    pages: &[PageOut],
+    params: &FetchParams,
+    model: Option<&StaticModel>,
+    config: RankConfig,
+) -> String {
     let max_tokens = params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
     let query = [
         params.query.clone().unwrap_or_default(),
@@ -57,8 +74,8 @@ pub fn respond(pages: &[PageOut], params: &FetchParams) -> String {
         .filter(|(_, p)| p.ok)
         .flat_map(|(i, p)| chunk(i, &p.body))
         .collect();
-    let scores = rank::bm25(&query, &chunks);
-    pack_passages(pages, &chunks, &scores, max_tokens)
+    let scores = rank::hybrid(&query, &chunks, model, config.fusion);
+    pack_passages(pages, &chunks, &scores, config.min_relative, max_tokens)
 }
 
 pub async fn fetch_one(client: &Client, url: &str) -> PageOut {

@@ -3,7 +3,9 @@ use std::{collections::HashMap, sync::LazyLock};
 use regex::Regex;
 use rust_stemmers::{Algorithm, Stemmer};
 
-use crate::chunk::Chunk;
+use model2vec_rs::model::StaticModel;
+
+use crate::{chunk::Chunk, embed};
 
 /// BM25 term-frequency saturation and length normalisation (standard values).
 const K1: f32 = 1.2;
@@ -86,6 +88,85 @@ pub fn bm25(query: &str, chunks: &[Chunk]) -> Vec<f32> {
         .collect()
 }
 
+/// How BM25 and embedding scores are combined.
+#[derive(Debug, Clone, Copy)]
+pub enum Fusion {
+    /// Reciprocal rank fusion: `Σ 1 / (k + rank)` over both rankings.
+    Rrf { k: f32 },
+    /// Each score min-max normalised over the call, then
+    /// `bm25_weight · bm25 + (1 − bm25_weight) · cosine`.
+    Weighted { bm25_weight: f32 },
+}
+
+/// Ranking settings, tuned with the eval set (`examples/eval.rs`).
+#[derive(Debug, Clone, Copy)]
+pub struct RankConfig {
+    pub fusion: Fusion,
+    /// Passages scoring below this fraction of the best one are left out.
+    pub min_relative: f32,
+}
+
+impl Default for RankConfig {
+    /// From `eval --sweep` on 15 cases: weighted fusion with the embedding
+    /// score dominant ranked the answer first in 14/15 at ~1,070 tokens.
+    /// RRF ranked as well, but its flat scores make the relative cut-off
+    /// ineffective, so replies fill the budget (~1,600–1,760 tokens).
+    fn default() -> Self {
+        Self {
+            fusion: Fusion::Weighted { bm25_weight: 0.3 },
+            min_relative: 0.7,
+        }
+    }
+}
+
+/// Score every chunk for the query: BM25, fused with embedding similarity
+/// when a model is available. Higher is better; 0 means unrelated.
+pub fn hybrid(
+    query: &str,
+    chunks: &[Chunk],
+    model: Option<&StaticModel>,
+    fusion: Fusion,
+) -> Vec<f32> {
+    let lexical = bm25(query, chunks);
+    let Some(model) = model else {
+        return lexical;
+    };
+    let texts: Vec<String> = chunks.iter().map(scoring_text).collect();
+    let dense = embed::similarities(model, query, &texts);
+    match fusion {
+        Fusion::Rrf { k } => {
+            let mut fused = vec![0.0; chunks.len()];
+            for (scores, skip_zero) in [(&lexical, true), (&dense, false)] {
+                let mut order: Vec<usize> = (0..chunks.len())
+                    .filter(|&i| !skip_zero || scores[i] > 0.0)
+                    .collect();
+                order.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]));
+                for (rank, i) in order.into_iter().enumerate() {
+                    fused[i] += 1.0 / (k + rank as f32 + 1.0);
+                }
+            }
+            fused
+        }
+        Fusion::Weighted { bm25_weight } => {
+            let (l, d) = (min_max(&lexical), min_max(&dense));
+            l.iter()
+                .zip(&d)
+                .map(|(l, d)| bm25_weight * l + (1.0 - bm25_weight) * d)
+                .collect()
+        }
+    }
+}
+
+/// Scale scores to 0..1 over the call; all zeros if they are all equal.
+fn min_max(scores: &[f32]) -> Vec<f32> {
+    let lo = scores.iter().copied().fold(f32::INFINITY, f32::min);
+    let hi = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    if hi - lo <= f32::EPSILON {
+        return vec![0.0; scores.len()];
+    }
+    scores.iter().map(|s| (s - lo) / (hi - lo)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +207,22 @@ mod tests {
         let s = bm25("how to install", &chunks);
         assert!(s[1] > s[2] && s[2] > s[0], "{s:?}");
         assert_eq!(s[0], 0.0);
+    }
+
+    #[test]
+    fn min_max_scales_and_handles_flat_scores() {
+        assert_eq!(min_max(&[2.0, 4.0, 3.0]), vec![0.0, 1.0, 0.5]);
+        assert_eq!(min_max(&[1.0, 1.0]), vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn hybrid_without_model_is_bm25() {
+        let chunks = [c("", "install guide"), c("", "pricing")];
+        let fusion = RankConfig::default().fusion;
+        assert_eq!(
+            hybrid("install", &chunks, None, fusion),
+            bm25("install", &chunks)
+        );
     }
 
     #[test]

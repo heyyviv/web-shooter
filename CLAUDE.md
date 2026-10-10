@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Milestones M0–M2 are done. `fetch` downloads many URLs concurrently and converts them to markdown. Without a query it fits whole pages to the token budget. With `query`/`keywords` it returns BM25-ranked passages. Next is M3 (static embeddings + RRF). Milestones are listed under "Plan" below.
+Milestones M0–M3 are done. `fetch` downloads many URLs concurrently and converts them to markdown. Without a query it fits whole pages to the token budget. With `query`/`keywords` it returns passages ranked by BM25 fused with static embeddings. Next is M4 (cross-encoder reranker). Milestones are listed under "Plan" below.
 
 ## Commands
 
 - Build: `cargo build` (release: `cargo build --release`)
 - Test: `cargo test`
 - Debug extraction on one page: `cargo run --example probe -- <url> [variant]`. It prints the size of each converter setting to stderr; pass `final` (or `plain`, `main`, `readability`, …) to print that markdown.
-- Ranking test set: `cargo run --release --example eval` (`-v` prints output for failed cases, `--refresh` refetches page snapshots). Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
+- Ranking test set: `cargo run --release --example eval` (`-v` prints output for failed cases, `--refresh` refetches page snapshots, `--sweep` compares ranking settings, `--bm25` ranks without embeddings). Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
 - Run as MCP server: `./target/debug/web-shooter` (speaks JSON-RPC on stdin/stdout, so log only to stderr)
 - Register with Claude Code: `claude mcp add web-shooter -- /absolute/path/to/target/release/web-shooter`
 
@@ -24,7 +24,8 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 - `src/fetcher.rs`: the HTTP client (via `spider::reqwest`) and single-page fetch through `spider::page::Page::new_page`.
 - `src/extract.rs`: HTML → markdown. It reads the title, JSON-LD and `__NEXT_DATA__` in one `lol_html` pass, converts with `spider_transformations`, then cleans up the result in `tidy`.
 - `src/chunk.rs`: splits markdown into ~200-token chunks at headings, each with its heading path. Skips back-matter sections (References, Notes, External links…).
-- `src/rank.rs`: tokenizer (stopwords, Snowball stemming, hyphen joining) and BM25 over all chunks in the call.
+- `src/rank.rs`: tokenizer (stopwords, Snowball stemming, hyphen joining), BM25 over all chunks in the call, and `hybrid`, which fuses BM25 with embedding similarity. `RankConfig::default()` holds the tuned fusion and cut-off.
+- `src/embed.rs`: `Embedder` loads the `model2vec` static embedding model once in the background (started in `main`). The first query waits for it. If it can't load, ranking falls back to BM25.
 - `src/pack.rs`: `pack` fits whole pages into the budget, and `pack_passages` packs ranked passages grouped by page (tokens are estimated as bytes / 4).
 - `eval/cases.json`: test cases (pages, query, text the answer must contain). Page snapshots are cached in `eval/snapshots/` (git-ignored).
 
@@ -33,6 +34,9 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 - Use `rmcp::schemars`, not a separate `schemars` dependency, so the versions match.
 - `spider` is used with `default-features = false`. Its default and `basic` features pull in io_uring, sqlx and more.
 - In `spider_transformations`, keep `clean_html` off because it empties Wikipedia and Next.js pages. Keep `readability` off because it drops headings. Noise is removed in `extract::tidy` instead.
+- The embedding model (`minishlab/potion-retrieval-32M`, override with `WEB_SHOOTER_EMBED_MODEL`) is downloaded into the Hugging Face cache (`~/.cache/huggingface`) on first use. That took ~33 s once; after that it loads in ~50 ms.
+- `model2vec-rs` is built with `default-features = false, features = ["hf-hub", "fancy-regex"]` to avoid the oniguruma C library.
+- Fusion is a min-max-normalised weighted sum, not RRF as first planned. RRF ranked as well in the eval, but its flat scores defeat the relative cut-off, so replies filled the budget.
 - `fetch` does not check robots.txt: it reads pages the client asked for by URL, like a browser. `crawl` (M6) will respect robots.txt.
 
 ## Goal
@@ -58,7 +62,7 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
   1. **Fetch:** plain HTTP first.
   2. **Extract:** read embedded JSON first (`__NEXT_DATA__`, JSON-LD). Otherwise extract the main content and convert it to markdown. If the result is empty, fall back to headless Chrome.
   3. **Chunk:** split by headings and prefix each chunk with its heading path.
-  4. **Rank:** BM25 plus static embeddings (`model2vec`), merged with reciprocal rank fusion (RRF). Then a cross-encoder reranker, **on by default**.
+  4. **Rank:** BM25 plus static embeddings (`model2vec`), fused by a normalised weighted sum. Then a cross-encoder reranker, **on by default**.
   5. **Pack:** fill the token budget and return each passage with its URL, heading path and the page outline.
 - **Crawl frontier:** a priority queue. Links are scored by the ranker's cheap stage (BM25 plus embeddings) on anchor text, URL and nearby text. The crawl stops early once it has enough good results.
 - **Cache:** SQLite. It stores fetched pages and chunks with an expiry time and uses ETag / conditional requests.
@@ -76,7 +80,7 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 | M0 | Skeleton: stdio MCP server with a stub `fetch` (done) |
 | M1 | Fetch many URLs at once and convert to markdown, read embedded JSON, cut to the token budget (done) |
 | M2 | Chunking, BM25 and packing: `fetch` with `query` returns only matching passages (done) |
-| M3 | Static embeddings (`model2vec-rs`) merged with BM25 by RRF, models downloaded on first run |
+| M3 | Static embeddings (`model2vec-rs`) fused with BM25, models downloaded on first run (done; weighted fusion instead of RRF) |
 | M4 | Cross-encoder reranker (`fastembed`), on by default |
 | M5 | SQLite cache (`rusqlite`) with ETag |
 | M6 | `links` and `crawl` tools with the scored frontier and early stop |

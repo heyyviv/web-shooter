@@ -1,21 +1,31 @@
-//! Ranking test set: `cargo run --release --example eval [-- --refresh] [-- -v]`.
+//! Ranking test set: `cargo run --release --example eval [-- flags]`.
 //!
 //! Each case in `eval/cases.json` names pages, a query, and text the answer
 //! must contain. Pages are saved under `eval/snapshots/` on first run so
-//! results don't drift as sites change; `--refresh` fetches them again.
+//! results don't drift as sites change.
+//!
+//! Flags:
+//! - `--refresh`: fetch the snapshots again
+//! - `-v`: print the output of cases whose answer was not found
+//! - `--sweep`: compare ranking settings, one summary line each
+//! - `--bm25`: rank without the embedding model
 //!
 //! Reported per case:
 //! - found: every expected string appears somewhere in the output
 //! - top: the highest-scored passage contains the first expected string
 //! - tokens: estimated size of the output
+//! - ms: time to chunk, rank and pack (extraction excluded)
 
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, time::Instant};
 
+use model2vec_rs::model::StaticModel;
 use serde::Deserialize;
 use web_shooter::{
+    embed,
     extract::extract,
     fetcher,
-    pack::estimate_tokens,
+    pack::{PageOut, estimate_tokens},
+    rank::{Fusion, RankConfig},
     tools::fetch::{FetchParams, page_out, respond},
 };
 
@@ -29,21 +39,96 @@ struct Case {
     expect: Vec<String>,
 }
 
+struct Outcome {
+    found: bool,
+    top: bool,
+    tokens: usize,
+    ms: f64,
+    out: String,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let refresh = args.iter().any(|a| a == "--refresh");
-    let verbose = args.iter().any(|a| a == "-v");
+    let has = |flag: &str| args.iter().any(|a| a == flag);
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("eval");
     let cases: Vec<Case> = serde_json::from_str(&fs::read_to_string(root.join("cases.json"))?)?;
-    let snapshots = root.join("snapshots");
-    fs::create_dir_all(&snapshots)?;
-    let client = fetcher::build_client()?;
+    let pages = load_pages(&cases, &root.join("snapshots"), has("--refresh")).await?;
+    let model = if has("--bm25") { None } else { embed::load() };
 
-    let (mut found_n, mut top_n, mut tokens_total) = (0, 0, 0);
-    println!("{:<26} {:>5} {:>4} {:>7}", "case", "found", "top", "tokens");
-    for case in &cases {
+    if has("--sweep") {
+        let mut configs = vec![(
+            "bm25 only".to_string(),
+            None,
+            RankConfig {
+                fusion: Fusion::Weighted { bm25_weight: 1.0 },
+                min_relative: 0.4,
+            },
+        )];
+        for k in [5.0, 20.0, 60.0] {
+            for min_relative in [0.5, 0.7, 0.85] {
+                configs.push((
+                    format!("rrf k={k} min={min_relative}"),
+                    model.as_ref(),
+                    RankConfig {
+                        fusion: Fusion::Rrf { k },
+                        min_relative,
+                    },
+                ));
+            }
+        }
+        for bm25_weight in [0.2, 0.3, 0.4] {
+            for min_relative in [0.5, 0.6, 0.7] {
+                configs.push((
+                    format!("weighted w={bm25_weight} min={min_relative}"),
+                    model.as_ref(),
+                    RankConfig {
+                        fusion: Fusion::Weighted { bm25_weight },
+                        min_relative,
+                    },
+                ));
+            }
+        }
+        for (name, model, config) in configs {
+            let outcomes = run_all(&cases, &pages, model, config);
+            println!("{name:<30} {}", summary(&outcomes));
+        }
+        return Ok(());
+    }
+
+    let outcomes = run_all(&cases, &pages, model.as_ref(), RankConfig::default());
+    println!(
+        "{:<26} {:>5} {:>4} {:>7} {:>6}",
+        "case", "found", "top", "tokens", "ms"
+    );
+    for (case, o) in cases.iter().zip(&outcomes) {
+        println!(
+            "{:<26} {:>5} {:>4} {:>7} {:>6.1}",
+            case.name,
+            mark(o.found),
+            mark(o.top),
+            o.tokens,
+            o.ms
+        );
+        if has("-v") && !o.found {
+            println!("--- output for {}\n{}\n---", case.name, o.out);
+        }
+    }
+    println!("\n{}", summary(&outcomes));
+    Ok(())
+}
+
+/// Extracted pages for every case, from snapshots (fetched on first use).
+async fn load_pages(
+    cases: &[Case],
+    snapshots: &PathBuf,
+    refresh: bool,
+) -> anyhow::Result<Vec<Vec<PageOut>>> {
+    fs::create_dir_all(snapshots)?;
+    let client = fetcher::build_client()?;
+    let mut all = Vec::new();
+    for case in cases {
         let mut pages = Vec::new();
         for url in &case.urls {
             let path = snapshots.join(format!("{:016x}.html", fnv(url)));
@@ -55,38 +140,51 @@ async fn main() -> anyhow::Result<()> {
             let body = fs::read(&path)?;
             pages.push(page_out(url.clone(), Some(extract(url, &body))));
         }
-
-        let params = FetchParams {
-            urls: case.urls.clone(),
-            query: Some(case.query.clone()),
-            keywords: case.keywords.clone(),
-            max_tokens: case.max_tokens,
-        };
-        let out = respond(&pages, &params);
-        let found = case.expect.iter().all(|e| out.contains(e.as_str()));
-        let top = best_passage(&out).contains(case.expect[0].as_str());
-        let tokens = estimate_tokens(&out);
-
-        found_n += found as usize;
-        top_n += top as usize;
-        tokens_total += tokens;
-        println!(
-            "{:<26} {:>5} {:>4} {:>7}",
-            case.name,
-            mark(found),
-            mark(top),
-            tokens
-        );
-        if verbose && !found {
-            println!("--- output for {}\n{out}\n---", case.name);
-        }
+        all.push(pages);
     }
-    println!(
-        "\nfound {found_n}/{n} · top {top_n}/{n} · avg {} tokens",
-        tokens_total / cases.len().max(1),
-        n = cases.len()
-    );
-    Ok(())
+    Ok(all)
+}
+
+fn run_all(
+    cases: &[Case],
+    pages: &[Vec<PageOut>],
+    model: Option<&StaticModel>,
+    config: RankConfig,
+) -> Vec<Outcome> {
+    cases
+        .iter()
+        .zip(pages)
+        .map(|(case, pages)| {
+            let params = FetchParams {
+                urls: case.urls.clone(),
+                query: Some(case.query.clone()),
+                keywords: case.keywords.clone(),
+                max_tokens: case.max_tokens,
+            };
+            let started = Instant::now();
+            let out = respond(pages, &params, model, config);
+            let ms = started.elapsed().as_secs_f64() * 1000.0;
+            Outcome {
+                found: case.expect.iter().all(|e| out.contains(e.as_str())),
+                top: best_passage(&out).contains(case.expect[0].as_str()),
+                tokens: estimate_tokens(&out),
+                ms,
+                out,
+            }
+        })
+        .collect()
+}
+
+fn summary(outcomes: &[Outcome]) -> String {
+    let n = outcomes.len().max(1);
+    let found = outcomes.iter().filter(|o| o.found).count();
+    let top = outcomes.iter().filter(|o| o.top).count();
+    let tokens = outcomes.iter().map(|o| o.tokens).sum::<usize>() / n;
+    let ms = outcomes.iter().map(|o| o.ms).sum::<f64>() / n as f64;
+    format!(
+        "found {found}/{n} · top {top}/{n} · avg {tokens} tokens · avg {ms:.1} ms",
+        n = outcomes.len()
+    )
 }
 
 /// The passage block whose `§ heading · score` line has the highest score.

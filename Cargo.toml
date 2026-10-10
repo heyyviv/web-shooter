@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1.0.104"
 futures = "0.3.34"
 lol_html = "2"
+model2vec-rs = { version = "0.3.0", default-features = false, features = ["hf-hub", "fancy-regex"] }
 regex = "1.13.1"
 rmcp = { version = "3.5.1", features = ["server", "transport-io", "macros"] }
 rust-stemmers = "1.2.0"

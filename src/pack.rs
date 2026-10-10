@@ -64,15 +64,11 @@ pub fn pack(pages: &[PageOut], max_tokens: usize) -> String {
 const TRUNCATION_NOTE: &str =
     "\n… [truncated, ~{left} more tokens: pass a query or raise max_tokens]";
 
-/// Passages scoring below this fraction of the best passage are left out:
-/// they rarely help, and the caller can widen the query if needed. 0.4 was
-/// the highest value that kept every answer in the eval set (`examples/eval.rs`).
-const MIN_RELATIVE_SCORE: f32 = 0.4;
-
 /// Section names listed per page, so the caller can ask for a different one.
 const OUTLINE_MAX: usize = 8;
 
 /// Pack the best-scoring chunks into `max_tokens`, grouped by page.
+/// Passages scoring below `min_relative` × the best score are left out.
 ///
 /// Pages appear in order of their best passage; passages within a page are
 /// in document order, with neighbours under the same headings merged.
@@ -80,6 +76,7 @@ pub fn pack_passages(
     pages: &[PageOut],
     chunks: &[Chunk],
     scores: &[f32],
+    min_relative: f32,
     max_tokens: usize,
 ) -> String {
     let top = scores.iter().copied().fold(0.0_f32, f32::max);
@@ -101,7 +98,7 @@ pub fn pack_passages(
     );
 
     let mut ranked: Vec<usize> = (0..chunks.len())
-        .filter(|&i| top > 0.0 && scores[i] >= top * MIN_RELATIVE_SCORE)
+        .filter(|&i| top > 0.0 && scores[i] >= top * min_relative)
         .collect();
     ranked.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]));
 
@@ -255,7 +252,7 @@ mod tests {
             chunk(0, 2, "B", "beta"),
             chunk(1, 0, "C", "gamma"),
         ];
-        let out = pack_passages(&pages, &chunks, &[0.5, 0.4, 0.0, 1.0], 500);
+        let out = pack_passages(&pages, &chunks, &[0.5, 0.4, 0.0, 1.0], 0.4, 500);
         assert_eq!(
             out,
             "[2] https://example.com · untitled\n§ C · 1.00\ngamma\n\n\
@@ -267,7 +264,7 @@ mod tests {
     fn passages_respect_budget_and_report_misses() {
         let pages = [page("body"), page("body")];
         let chunks = [chunk(0, 0, "", &"w ".repeat(400)), chunk(0, 1, "", "small")];
-        let out = pack_passages(&pages, &chunks, &[1.0, 0.9], 60);
+        let out = pack_passages(&pages, &chunks, &[1.0, 0.9], 0.4, 60);
         assert!(!out.contains("w w"), "big chunk should not fit: {out}");
         assert!(out.contains("§ (top) · 0.90\nsmall"));
         assert!(out.contains("[2] https://example.com · untitled\n(no matching passages)"));
@@ -276,7 +273,7 @@ mod tests {
 
     #[test]
     fn no_match_says_so() {
-        let out = pack_passages(&[page("x")], &[chunk(0, 0, "", "x")], &[0.0], 100);
+        let out = pack_passages(&[page("x")], &[chunk(0, 0, "", "x")], &[0.0], 0.4, 100);
         assert!(out.ends_with("No passages matched the query. Try other keywords, or omit query to read pages from the top."));
     }
 

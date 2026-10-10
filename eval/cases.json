@@ -63,5 +63,35 @@
     ],
     "query": "crawler politeness delay between requests",
     "expect": ["60 seconds"]
+  },
+  {
+    "name": "para-bot-identity",
+    "urls": ["https://en.wikipedia.org/wiki/Web_crawler"],
+    "query": "how do bots tell site owners who is visiting",
+    "expect": ["identify themselves"]
+  },
+  {
+    "name": "para-update-schedule",
+    "urls": ["https://en.wikipedia.org/wiki/Web_crawler"],
+    "query": "which update schedule keeps stored copies most current",
+    "expect": ["uniform policy outperforms"]
+  },
+  {
+    "name": "para-leave-field",
+    "urls": ["https://www.paulgraham.com/greatwork.html"],
+    "query": "is it ok to leave my area for a more thrilling one",
+    "expect": ["afraid to switch"]
+  },
+  {
+    "name": "para-motivation",
+    "urls": ["https://www.paulgraham.com/greatwork.html"],
+    "query": "staying motivated and in good spirits during long projects",
+    "expect": ["Husband your morale"]
+  },
+  {
+    "name": "para-variadic",
+    "urls": ["https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/"],
+    "query": "functions taking an unknown count of parameters",
+    "expect": ["VaList"]
   }
 ]

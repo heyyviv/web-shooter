@@ -231,6 +231,9 @@ fn collect_prose(v: &Value, out: &mut Vec<String>) {
 static EMPTY_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\s*\]\([^)]*\)").unwrap());
 static CITATION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[\[[^\]]*\]\]\([^)]*\)").unwrap());
+/// Wiki-style section edit links: `[[edit](…)]` or `[edit](…)`.
+static EDIT_LINK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[?\[edit\]\([^)]*\)\]?").unwrap());
 static FRAGMENT_LINK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(#[^)]*\)").unwrap());
 static ENTITY: LazyLock<Regex> =
@@ -242,6 +245,7 @@ static JUNK_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[\s|\[\]()]*$
 fn tidy(markdown: &str) -> String {
     let s = EMPTY_LINK.replace_all(markdown, "");
     let s = CITATION.replace_all(&s, "");
+    let s = EDIT_LINK.replace_all(&s, "");
     let s = FRAGMENT_LINK.replace_all(&s, "$1");
     let s = ENTITY.replace_all(&s, |c: &regex::Captures| {
         decode_entity(&c[1]).unwrap_or_else(|| c[0].to_string())
@@ -339,7 +343,7 @@ mod tests {
 
     #[test]
     fn tidy_removes_link_noise() {
-        let md = "A [web](https://w.org/Web_(x)) crawler.[[5]](https://w.org/#cite-5)\n[\n](#)\n[Jump](#main) text &amp; more &#x60;x&#96;";
+        let md = "A [web](https://w.org/Web_(x)) crawler.[[5]](https://w.org/#cite-5)\n[\n](#)\n[Jump](#main) text &amp; more &#x60;x&#96;\n[[edit](https://w.org/x?action=edit)]";
         assert_eq!(
             tidy(md),
             "A [web](https://w.org/Web_(x)) crawler.\nJump text & more `x`"
