@@ -9,7 +9,7 @@ Milestones M0–M4 and M6 are done. Three tools:
 - `links` lists a page's links, ranked by a query if given.
 - `crawl` does a best-first crawl from a start page and returns the most relevant pages as URLs with one-line snippets.
 
-Next is M7 (benchmark against Firecrawl and Jina). Milestones are listed under "Plan" below.
+M7 is in progress. The single-page benchmark is done; see "Benchmark results" below. Milestones are listed under "Plan" below.
 
 ## Commands
 
@@ -17,6 +17,7 @@ Next is M7 (benchmark against Firecrawl and Jina). Milestones are listed under "
 - Test: `cargo test`
 - Debug extraction on one page: `cargo run --example probe -- <url> [variant]`. It prints the size of each converter setting to stderr; pass `final` (or `plain`, `main`, `readability`, …) to print that markdown.
 - Ranking test set: `cargo run --release --example eval` (`-v` prints output for failed cases, `--refresh` refetches page snapshots, `--precise` adds the reranker, `--sweep` compares reranker settings, `--bm25` ranks without embeddings). Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
+- Benchmark against Firecrawl and Jina Reader (live network, ~14 Firecrawl credits per run): `FIRECRAWL_API_KEY=… cargo run --release --example bench`. Never write the key into the repo.
 - Run as MCP server: `./target/debug/web-shooter` (speaks JSON-RPC on stdin/stdout, so log only to stderr)
 - Register with Claude Code: `claude mcp add web-shooter -- /absolute/path/to/target/release/web-shooter`
 
@@ -37,6 +38,19 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 - `src/models.rs`: `ModelSet`, the models a server owns. `ready(precise)` hands ranking the reranker only for `precise` calls.
 - `src/pack.rs`: `pack` fits whole pages into the budget, and `pack_passages` packs ranked passages grouped by page (tokens are estimated as bytes / 4).
 - `eval/cases.json`: test cases (pages, query, text the answer must contain). Page snapshots are cached in `eval/snapshots/` (git-ignored).
+
+## Benchmark results
+
+First run (2026-10-11) on the 15 eval cases, single run, live network. Firecrawl `/v2/scrape` and Jina return whole pages, so their "answer present" is near-certain; web-shooter returns only ranked passages.
+
+| Tool | Median latency | Avg tokens | Answer present |
+|---|---|---|---|
+| web-shooter `fetch` + query | 405 ms | 1,138 | 14/15 |
+| Firecrawl (cache allowed) | 1,214 ms | 16,513 | 15/15 |
+| Firecrawl fresh (`maxAge: 0`) | 3,341 ms | 16,523 | 15/15 |
+| Jina Reader | 625 ms | 15,692 | 15/15 |
+
+Caveats: these are the same cases the ranking was tuned on; there was one run, so slow origins skew it (paulgraham.com took 0.9–6 s); none of the pages need JavaScript or have anti-bot protection, which is where Firecrawl and Jina have an advantage; crawl hasn't been compared yet. The Firecrawl free plan allows about 10 requests a minute, so `bench` spaces its requests 6.5 s apart.
 
 ## Gotchas
 
