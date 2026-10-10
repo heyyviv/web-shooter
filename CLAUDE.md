@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Milestones M0 and M1 are done: `fetch` downloads many URLs concurrently, converts them to markdown and fits them to a token budget. `query` and `keywords` are accepted but not used yet. Next is M2 (chunking and BM25). Milestones are listed under "Plan" below.
+Milestones M0–M2 are done. `fetch` downloads many URLs concurrently and converts them to markdown. Without a query it fits whole pages to the token budget. With `query`/`keywords` it returns BM25-ranked passages. Next is M3 (static embeddings + RRF). Milestones are listed under "Plan" below.
 
 ## Commands
 
 - Build: `cargo build` (release: `cargo build --release`)
 - Test: `cargo test`
 - Debug extraction on one page: `cargo run --example probe -- <url> [variant]`. It prints the size of each converter setting to stderr; pass `final` (or `plain`, `main`, `readability`, …) to print that markdown.
+- Ranking test set: `cargo run --release --example eval` (`-v` prints output for failed cases, `--refresh` refetches page snapshots). Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
 - Run as MCP server: `./target/debug/web-shooter` (speaks JSON-RPC on stdin/stdout, so log only to stderr)
 - Register with Claude Code: `claude mcp add web-shooter -- /absolute/path/to/target/release/web-shooter`
 
@@ -22,7 +23,10 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 - `src/tools/<name>.rs`: each tool's parameter struct (doc comments become the JSON schema the LLM sees, so keep them short) and its `run` function.
 - `src/fetcher.rs`: the HTTP client (via `spider::reqwest`) and single-page fetch through `spider::page::Page::new_page`.
 - `src/extract.rs`: HTML → markdown. It reads the title, JSON-LD and `__NEXT_DATA__` in one `lol_html` pass, converts with `spider_transformations`, then cleans up the result in `tidy`.
-- `src/pack.rs`: fits pages into the token budget (tokens are estimated as bytes / 4).
+- `src/chunk.rs`: splits markdown into ~200-token chunks at headings, each with its heading path. Skips back-matter sections (References, Notes, External links…).
+- `src/rank.rs`: tokenizer (stopwords, Snowball stemming, hyphen joining) and BM25 over all chunks in the call.
+- `src/pack.rs`: `pack` fits whole pages into the budget, and `pack_passages` packs ranked passages grouped by page (tokens are estimated as bytes / 4).
+- `eval/cases.json`: test cases (pages, query, text the answer must contain). Page snapshots are cached in `eval/snapshots/` (git-ignored).
 
 ## Gotchas
 
@@ -71,7 +75,7 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 |---|---|
 | M0 | Skeleton: stdio MCP server with a stub `fetch` (done) |
 | M1 | Fetch many URLs at once and convert to markdown, read embedded JSON, cut to the token budget (done) |
-| M2 | Chunking, BM25 and packing: `fetch` with `query` returns only matching passages |
+| M2 | Chunking, BM25 and packing: `fetch` with `query` returns only matching passages (done) |
 | M3 | Static embeddings (`model2vec-rs`) merged with BM25 by RRF, models downloaded on first run |
 | M4 | Cross-encoder reranker (`fastembed`), on by default |
 | M5 | SQLite cache (`rusqlite`) with ETag |

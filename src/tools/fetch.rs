@@ -4,9 +4,11 @@ use serde::Deserialize;
 use spider::reqwest::Client;
 
 use crate::{
+    chunk::{Chunk, chunk},
     extract::extract,
     fetcher,
-    pack::{PageOut, pack},
+    pack::{PageOut, pack, pack_passages},
+    rank,
 };
 
 /// Default token budget for one `fetch` call.
@@ -20,29 +22,47 @@ pub struct FetchParams {
     /// Pages to read. Pass several URLs in one call rather than calling once per URL.
     pub urls: Vec<String>,
     /// What you are looking for. When set, only the most relevant passages are returned.
-    #[allow(dead_code, reason = "used for ranking from M2")]
     pub query: Option<String>,
     /// Exact terms or synonyms that should match, to sharpen the query.
-    #[allow(dead_code, reason = "used for ranking from M2")]
     pub keywords: Option<Vec<String>>,
     /// Maximum tokens to return across all pages (default 2000).
     pub max_tokens: Option<usize>,
 }
 
 pub async fn run(client: &Client, params: FetchParams) -> String {
-    let max_tokens = params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-
-    let pages: Vec<PageOut> = stream::iter(params.urls)
-        .map(|url| fetch_one(client, url))
+    let pages: Vec<PageOut> = stream::iter(params.urls.clone())
+        .map(|url| async move { fetch_one(client, &url).await })
         .buffered(CONCURRENCY)
         .collect()
         .await;
-
-    pack(&pages, max_tokens)
+    respond(&pages, &params)
 }
 
-async fn fetch_one(client: &Client, url: String) -> PageOut {
-    let fetched = fetcher::fetch(client, &url).await;
+/// Build the tool output from already-fetched pages: whole pages without a
+/// query, ranked passages with one.
+pub fn respond(pages: &[PageOut], params: &FetchParams) -> String {
+    let max_tokens = params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+    let query = [
+        params.query.clone().unwrap_or_default(),
+        params.keywords.clone().unwrap_or_default().join(" "),
+    ]
+    .join(" ");
+    if query.trim().is_empty() {
+        return pack(pages, max_tokens);
+    }
+
+    let chunks: Vec<Chunk> = pages
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.ok)
+        .flat_map(|(i, p)| chunk(i, &p.body))
+        .collect();
+    let scores = rank::bm25(&query, &chunks);
+    pack_passages(pages, &chunks, &scores, max_tokens)
+}
+
+pub async fn fetch_one(client: &Client, url: &str) -> PageOut {
+    let fetched = fetcher::fetch(client, url).await;
     if !(200..300).contains(&fetched.status) {
         return PageOut {
             url: fetched.url,
@@ -54,20 +74,25 @@ async fn fetch_one(client: &Client, url: String) -> PageOut {
     // Extraction is CPU-bound; keep it off the async worker threads.
     let url = fetched.url.clone();
     let extracted = tokio::task::spawn_blocking(move || extract(&fetched.url, &fetched.body)).await;
+    page_out(url, extracted.ok())
+}
+
+/// Wrap an extraction result as a page, turning empty or failed ones into errors.
+pub fn page_out(url: String, extracted: Option<crate::extract::Extracted>) -> PageOut {
     match extracted {
-        Ok(e) if !e.markdown.is_empty() => PageOut {
+        Some(e) if !e.markdown.is_empty() => PageOut {
             url,
             title: e.title,
             body: e.markdown,
             ok: true,
         },
-        Ok(_) => PageOut {
+        Some(_) => PageOut {
             url,
             title: None,
             body: "no readable content (the page may need JavaScript)".into(),
             ok: false,
         },
-        Err(_) => PageOut {
+        None => PageOut {
             url,
             title: None,
             body: "extraction failed".into(),

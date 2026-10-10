@@ -1,0 +1,67 @@
+[
+  {
+    "name": "wiki-revisit",
+    "urls": ["https://en.wikipedia.org/wiki/Web_crawler"],
+    "query": "how do crawlers decide when to revisit a page",
+    "expect": ["Proportional policy"]
+  },
+  {
+    "name": "wiki-politeness-delay",
+    "urls": ["https://en.wikipedia.org/wiki/Web_crawler"],
+    "query": "how long should a crawler wait between requests to the same server",
+    "expect": ["60 seconds"]
+  },
+  {
+    "name": "wiki-deep-web",
+    "urls": ["https://en.wikipedia.org/wiki/Web_crawler"],
+    "query": "finding pages hidden behind search forms",
+    "expect": ["deep web"]
+  },
+  {
+    "name": "pg-choose-work",
+    "urls": ["https://www.paulgraham.com/greatwork.html"],
+    "query": "how to choose what to work on",
+    "keywords": ["curiosity", "interest"],
+    "expect": ["Curiosity is the best guide"]
+  },
+  {
+    "name": "pg-procrastination",
+    "urls": ["https://www.paulgraham.com/greatwork.html"],
+    "query": "avoiding procrastination and getting started",
+    "expect": ["procrastinat"]
+  },
+  {
+    "name": "rust-variadics",
+    "urls": ["https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/"],
+    "query": "write C variadic functions in Rust",
+    "expect": ["VaList"]
+  },
+  {
+    "name": "nextjs-chunking",
+    "urls": ["https://nextjs.org/blog"],
+    "query": "how does turbopack split javascript into chunks",
+    "expect": ["How Turbopack chunks your JavaScript"]
+  },
+  {
+    "name": "react-existing-page",
+    "urls": ["https://react.dev/"],
+    "query": "use react inside an existing website without rewriting it",
+    "expect": ["Add React to your existing HTML page"]
+  },
+  {
+    "name": "greenhouse-rl-role",
+    "urls": ["https://job-boards.greenhouse.io/anthropic"],
+    "query": "reinforcement learning research engineer job",
+    "expect": ["Cybersecurity RL"]
+  },
+  {
+    "name": "multi-page-politeness",
+    "urls": [
+      "https://www.paulgraham.com/greatwork.html",
+      "https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/",
+      "https://en.wikipedia.org/wiki/Web_crawler"
+    ],
+    "query": "crawler politeness delay between requests",
+    "expect": ["60 seconds"]
+  }
+]

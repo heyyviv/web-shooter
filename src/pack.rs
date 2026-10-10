@@ -1,3 +1,5 @@
+use crate::chunk::{Chunk, outline};
+
 /// Rough token count: about 4 characters per token for English text.
 pub fn estimate_tokens(s: &str) -> usize {
     s.len().div_ceil(4)
@@ -62,6 +64,129 @@ pub fn pack(pages: &[PageOut], max_tokens: usize) -> String {
 const TRUNCATION_NOTE: &str =
     "\n… [truncated, ~{left} more tokens: pass a query or raise max_tokens]";
 
+/// Passages scoring below this fraction of the best passage are left out:
+/// they rarely help, and the caller can widen the query if needed. 0.4 was
+/// the highest value that kept every answer in the eval set (`examples/eval.rs`).
+const MIN_RELATIVE_SCORE: f32 = 0.4;
+
+/// Section names listed per page, so the caller can ask for a different one.
+const OUTLINE_MAX: usize = 8;
+
+/// Pack the best-scoring chunks into `max_tokens`, grouped by page.
+///
+/// Pages appear in order of their best passage; passages within a page are
+/// in document order, with neighbours under the same headings merged.
+pub fn pack_passages(
+    pages: &[PageOut],
+    chunks: &[Chunk],
+    scores: &[f32],
+    max_tokens: usize,
+) -> String {
+    let top = scores.iter().copied().fold(0.0_f32, f32::max);
+
+    let page_header = |i: usize| -> String {
+        let page = &pages[i];
+        if !page.ok {
+            return format!("[{}] {} · error: {}\n", i + 1, page.url, page.body);
+        }
+        let title = page.title.as_deref().unwrap_or("untitled");
+        format!("[{}] {} · {title}\n", i + 1, page.url)
+    };
+
+    // Every page gets its header line, so the caller can see what matched and what didn't.
+    let mut remaining = max_tokens.saturating_sub(
+        (0..pages.len())
+            .map(|i| estimate_tokens(&page_header(i)) + 4)
+            .sum(),
+    );
+
+    let mut ranked: Vec<usize> = (0..chunks.len())
+        .filter(|&i| top > 0.0 && scores[i] >= top * MIN_RELATIVE_SCORE)
+        .collect();
+    ranked.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]));
+
+    // Greedy: take the best passages that still fit. Each may need its own header.
+    let mut selected: Vec<usize> = Vec::new();
+    for i in ranked {
+        let cost = estimate_tokens(&chunks[i].text) + estimate_tokens(&chunks[i].heading_path) + 6;
+        if cost <= remaining {
+            remaining -= cost;
+            selected.push(i);
+        }
+    }
+
+    let mut by_page: Vec<Vec<usize>> = vec![Vec::new(); pages.len()];
+    for &i in &selected {
+        by_page[chunks[i].page].push(i);
+    }
+    let best = |p: usize| {
+        by_page[p]
+            .iter()
+            .map(|&i| scores[i])
+            .fold(0.0_f32, f32::max)
+    };
+    let mut page_order: Vec<usize> = (0..pages.len()).collect();
+    page_order.sort_by(|&a, &b| best(b).total_cmp(&best(a)));
+
+    let mut out = String::new();
+    for p in page_order {
+        out.push_str(&page_header(p));
+        if !pages[p].ok {
+            out.push('\n');
+            continue;
+        }
+        let picked = &mut by_page[p];
+        if picked.is_empty() {
+            out.push_str("(no matching passages)\n\n");
+            continue;
+        }
+        picked.sort_by_key(|&i| chunks[i].index);
+
+        // Merge runs of neighbouring chunks under the same headings.
+        let mut groups: Vec<(String, f32, String)> = Vec::new();
+        let mut prev: Option<&Chunk> = None;
+        for &i in picked.iter() {
+            let c = &chunks[i];
+            let relative = scores[i] / top;
+            match (prev, groups.last_mut()) {
+                (Some(pc), Some(g))
+                    if pc.index + 1 == c.index && pc.heading_path == c.heading_path =>
+                {
+                    g.1 = g.1.max(relative);
+                    g.2.push('\n');
+                    g.2.push_str(&c.text);
+                }
+                _ => groups.push((c.heading_path.clone(), relative, c.text.clone())),
+            }
+            prev = Some(c);
+        }
+        for (heading, score, text) in groups {
+            let heading = if heading.is_empty() {
+                "(top)"
+            } else {
+                &heading
+            };
+            out.push_str(&format!("§ {heading} · {score:.2}\n{text}\n"));
+        }
+
+        // Point at other sections only when part of the page was left out.
+        let page_chunks = chunks.iter().filter(|c| c.page == p).count();
+        if picked.len() < page_chunks {
+            let sections = outline(&pages[p].body, OUTLINE_MAX);
+            let cost = estimate_tokens(&sections.join(" · ")) + 4;
+            if !sections.is_empty() && cost <= remaining {
+                remaining -= cost;
+                out.push_str(&format!("sections: {}\n", sections.join(" · ")));
+            }
+        }
+        out.push('\n');
+    }
+    if selected.is_empty() {
+        out.push_str("No passages matched the query. Try other keywords, or omit query to read pages from the top.");
+    }
+    out.trim_end().to_string()
+}
+
 /// Cut to at most `max_bytes`, preferring a paragraph, then a line, boundary.
 fn truncate(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
@@ -110,6 +235,49 @@ mod tests {
         let out = pack(&[failed, page(&"b".repeat(4000))], 300);
         assert!(out.starts_with("[1] https://example.com · error: HTTP 404\n"));
         assert!(estimate_tokens(&out) <= 300);
+    }
+
+    fn chunk(page: usize, index: usize, heading: &str, text: &str) -> Chunk {
+        Chunk {
+            page,
+            index,
+            heading_path: heading.into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn passages_ordered_by_page_relevance_and_merged() {
+        let pages = [page("## A\nx\n## B\ny"), page("## C\nz")];
+        let chunks = [
+            chunk(0, 0, "A", "alpha one"),
+            chunk(0, 1, "A", "alpha two"),
+            chunk(0, 2, "B", "beta"),
+            chunk(1, 0, "C", "gamma"),
+        ];
+        let out = pack_passages(&pages, &chunks, &[0.5, 0.4, 0.0, 1.0], 500);
+        assert_eq!(
+            out,
+            "[2] https://example.com · untitled\n§ C · 1.00\ngamma\n\n\
+             [1] https://example.com · untitled\n§ A · 0.50\nalpha one\nalpha two\nsections: A · B"
+        );
+    }
+
+    #[test]
+    fn passages_respect_budget_and_report_misses() {
+        let pages = [page("body"), page("body")];
+        let chunks = [chunk(0, 0, "", &"w ".repeat(400)), chunk(0, 1, "", "small")];
+        let out = pack_passages(&pages, &chunks, &[1.0, 0.9], 60);
+        assert!(!out.contains("w w"), "big chunk should not fit: {out}");
+        assert!(out.contains("§ (top) · 0.90\nsmall"));
+        assert!(out.contains("[2] https://example.com · untitled\n(no matching passages)"));
+        assert!(estimate_tokens(&out) <= 60);
+    }
+
+    #[test]
+    fn no_match_says_so() {
+        let out = pack_passages(&[page("x")], &[chunk(0, 0, "", "x")], &[0.0], 100);
+        assert!(out.ends_with("No passages matched the query. Try other keywords, or omit query to read pages from the top."));
     }
 
     #[test]
