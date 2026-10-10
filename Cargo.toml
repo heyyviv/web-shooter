@@ -1,0 +1,10 @@
+[package]
+name = "web-shooter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+rmcp = { version = "3.5.1", features = ["server", "transport-io", "macros"] }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "io-std"] }
