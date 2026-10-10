@@ -1,14 +1,30 @@
 use std::time::Duration;
 
-use spider::{page::Page, reqwest::Client};
+use spider::{
+    page::Page,
+    reqwest::{
+        Client,
+        header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue},
+    },
+};
 
 /// Sent with every request and matched against robots.txt rules.
 pub const USER_AGENT: &str = concat!("web-shooter/", env!("CARGO_PKG_VERSION"));
 
 /// Shared HTTP client: one connection pool for every tool call.
+///
+/// Sends the `Accept` headers a browser would: some sites (e.g. uber.com)
+/// answer requests without them with HTTP 406.
 pub fn build_client() -> anyhow::Result<Client> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    );
+    headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
     Ok(Client::builder()
         .user_agent(USER_AGENT)
+        .default_headers(headers)
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(20))
         .build()?)
