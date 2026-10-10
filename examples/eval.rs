@@ -7,7 +7,8 @@
 //! Flags:
 //! - `--refresh`: fetch the snapshots again
 //! - `-v`: print the output of cases whose answer was not found
-//! - `--sweep`: compare ranking settings, one summary line each
+//! - `--precise`: also rerank with the cross-encoder, as `precise: true` does
+//! - `--sweep`: compare reranker settings, one summary line each
 //! - `--bm25`: rank without the embedding model
 //!
 //! Reported per case:
@@ -16,16 +17,16 @@
 //! - tokens: estimated size of the output
 //! - ms: time to chunk, rank and pack (extraction excluded)
 
-use std::{fs, path::PathBuf, time::Instant};
+use std::{fs, path::PathBuf, sync::Mutex, time::Instant};
 
-use model2vec_rs::model::StaticModel;
 use serde::Deserialize;
 use web_shooter::{
     embed,
     extract::extract,
     fetcher,
     pack::{PageOut, estimate_tokens},
-    rank::{Fusion, RankConfig},
+    rank::{Models, RankConfig},
+    rerank,
     tools::fetch::{FetchParams, page_out, respond},
 };
 
@@ -55,49 +56,46 @@ async fn main() -> anyhow::Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("eval");
     let cases: Vec<Case> = serde_json::from_str(&fs::read_to_string(root.join("cases.json"))?)?;
     let pages = load_pages(&cases, &root.join("snapshots"), has("--refresh")).await?;
-    let model = if has("--bm25") { None } else { embed::load() };
+    let embedder = if has("--bm25") { None } else { embed::load() };
+    let reranker = if has("--precise") || has("--sweep") {
+        rerank::load().map(Mutex::new)
+    } else {
+        None
+    };
+    let models = Models {
+        embedder: embedder.as_ref(),
+        reranker: reranker.as_ref(),
+    };
 
     if has("--sweep") {
+        let base = RankConfig::default();
         let mut configs = vec![(
-            "bm25 only".to_string(),
-            None,
+            "no reranker".to_string(),
             RankConfig {
-                fusion: Fusion::Weighted { bm25_weight: 1.0 },
-                min_relative: 0.4,
+                rerank_top: 0,
+                ..base
             },
         )];
-        for k in [5.0, 20.0, 60.0] {
-            for min_relative in [0.5, 0.7, 0.85] {
+        for rerank_top in [6, 8, 12] {
+            for rerank_min_relative in [0.3, 0.5, 0.7] {
                 configs.push((
-                    format!("rrf k={k} min={min_relative}"),
-                    model.as_ref(),
+                    format!("rerank top={rerank_top} min={rerank_min_relative}"),
                     RankConfig {
-                        fusion: Fusion::Rrf { k },
-                        min_relative,
+                        rerank_top,
+                        rerank_min_relative,
+                        ..base
                     },
                 ));
             }
         }
-        for bm25_weight in [0.2, 0.3, 0.4] {
-            for min_relative in [0.5, 0.6, 0.7] {
-                configs.push((
-                    format!("weighted w={bm25_weight} min={min_relative}"),
-                    model.as_ref(),
-                    RankConfig {
-                        fusion: Fusion::Weighted { bm25_weight },
-                        min_relative,
-                    },
-                ));
-            }
-        }
-        for (name, model, config) in configs {
-            let outcomes = run_all(&cases, &pages, model, config);
+        for (name, config) in configs {
+            let outcomes = run_all(&cases, &pages, models, config);
             println!("{name:<30} {}", summary(&outcomes));
         }
         return Ok(());
     }
 
-    let outcomes = run_all(&cases, &pages, model.as_ref(), RankConfig::default());
+    let outcomes = run_all(&cases, &pages, models, RankConfig::default());
     println!(
         "{:<26} {:>5} {:>4} {:>7} {:>6}",
         "case", "found", "top", "tokens", "ms"
@@ -113,6 +111,16 @@ async fn main() -> anyhow::Result<()> {
         );
         if has("-v") && !o.found {
             println!("--- output for {}\n{}\n---", case.name, o.out);
+        } else if has("-v") && !o.top {
+            let best: String = best_passage(&o.out)
+                .lines()
+                .take(4)
+                .collect::<Vec<_>>()
+                .join("\n    ");
+            println!(
+                "    expected {:?}, best passage:\n    § {best}",
+                case.expect[0]
+            );
         }
     }
     println!("\n{}", summary(&outcomes));
@@ -148,7 +156,7 @@ async fn load_pages(
 fn run_all(
     cases: &[Case],
     pages: &[Vec<PageOut>],
-    model: Option<&StaticModel>,
+    models: Models,
     config: RankConfig,
 ) -> Vec<Outcome> {
     cases
@@ -160,9 +168,11 @@ fn run_all(
                 query: Some(case.query.clone()),
                 keywords: case.keywords.clone(),
                 max_tokens: case.max_tokens,
+                // `respond` takes the models directly; the reranker is in `models` or not.
+                precise: None,
             };
             let started = Instant::now();
-            let out = respond(pages, &params, model, config);
+            let out = respond(pages, &params, models, config);
             let ms = started.elapsed().as_secs_f64() * 1000.0;
             Outcome {
                 found: case.expect.iter().all(|e| out.contains(e.as_str())),

@@ -1,16 +1,15 @@
 use futures::{StreamExt, stream};
-use model2vec_rs::model::StaticModel;
 use rmcp::schemars;
 use serde::Deserialize;
 use spider::reqwest::Client;
 
 use crate::{
     chunk::{Chunk, chunk},
-    embed::Embedder,
     extract::extract,
     fetcher,
+    models::ModelSet,
     pack::{PageOut, pack, pack_passages},
-    rank::{self, RankConfig},
+    rank::{self, Models, RankConfig},
 };
 
 /// Default token budget for one `fetch` call.
@@ -29,22 +28,30 @@ pub struct FetchParams {
     pub keywords: Option<Vec<String>>,
     /// Maximum tokens to return across all pages (default 2000).
     pub max_tokens: Option<usize>,
+    /// Rescore passages with a slower, more precise model (~0.3 s more, fewer tokens). Off by default.
+    pub precise: Option<bool>,
 }
 
-pub async fn run(client: &Client, embedder: &Embedder, params: FetchParams) -> String {
+pub async fn run(client: &Client, models: &ModelSet, params: FetchParams) -> String {
     let pages: Vec<PageOut> = stream::iter(params.urls.clone())
         .map(|url| async move { fetch_one(client, &url).await })
         .buffered(CONCURRENCY)
         .collect()
         .await;
+    let precise = params.precise.unwrap_or(false);
     if params.query.is_some() || params.keywords.is_some() {
-        // Wait for the model so the first query isn't ranked by BM25 alone.
-        embedder.get().await;
+        // Wait for the models so the first query isn't ranked without them.
+        models.wait(precise).await;
     }
     // Ranking is CPU-bound; keep it off the async worker threads.
-    let embedder = embedder.clone();
+    let models = models.clone();
     tokio::task::spawn_blocking(move || {
-        respond(&pages, &params, embedder.ready(), RankConfig::default())
+        respond(
+            &pages,
+            &params,
+            models.ready(precise),
+            RankConfig::default(),
+        )
     })
     .await
     .unwrap_or_else(|e| format!("error: ranking failed: {e}"))
@@ -55,7 +62,7 @@ pub async fn run(client: &Client, embedder: &Embedder, params: FetchParams) -> S
 pub fn respond(
     pages: &[PageOut],
     params: &FetchParams,
-    model: Option<&StaticModel>,
+    models: Models,
     config: RankConfig,
 ) -> String {
     let max_tokens = params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
@@ -74,8 +81,14 @@ pub fn respond(
         .filter(|(_, p)| p.ok)
         .flat_map(|(i, p)| chunk(i, &p.body))
         .collect();
-    let scores = rank::hybrid(&query, &chunks, model, config.fusion);
-    pack_passages(pages, &chunks, &scores, config.min_relative, max_tokens)
+    let ranked = rank::rank(&query, &chunks, models, config);
+    pack_passages(
+        pages,
+        &chunks,
+        &ranked.scores,
+        ranked.min_relative,
+        max_tokens,
+    )
 }
 
 pub async fn fetch_one(client: &Client, url: &str) -> PageOut {

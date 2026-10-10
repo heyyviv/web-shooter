@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+fastembed = { version = "7.1.1", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
 futures = "0.3.34"
 lol_html = "2"
 model2vec-rs = { version = "0.3.0", default-features = false, features = ["hf-hub", "fancy-regex"] }

@@ -7,8 +7,8 @@ use rmcp::{
 use spider::reqwest::Client;
 
 use crate::{
-    embed::Embedder,
     fetcher,
+    models::ModelSet,
     tools::fetch::{self, FetchParams},
 };
 
@@ -20,7 +20,7 @@ pub struct WebShooter {
     #[allow(dead_code, reason = "read by the tool_handler macro")]
     tool_router: ToolRouter<Self>,
     client: Client,
-    embedder: Embedder,
+    models: ModelSet,
 }
 
 #[tool_router]
@@ -29,13 +29,13 @@ impl WebShooter {
         Ok(Self {
             tool_router: Self::tool_router(),
             client: fetcher::build_client()?,
-            embedder: Embedder::default(),
+            models: ModelSet::default(),
         })
     }
 
     /// Start loading ranking models in the background.
     pub fn preload(&self) {
-        self.embedder.preload();
+        self.models.preload();
     }
 
     #[tool(
@@ -45,7 +45,7 @@ impl WebShooter {
         &self,
         Parameters(params): Parameters<FetchParams>,
     ) -> Result<CallToolResult, McpError> {
-        let text = fetch::run(&self.client, &self.embedder, params).await;
+        let text = fetch::run(&self.client, &self.models, params).await;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }

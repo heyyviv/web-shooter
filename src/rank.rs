@@ -1,11 +1,14 @@
-use std::{collections::HashMap, sync::LazyLock};
+use std::{
+    collections::HashMap,
+    sync::{LazyLock, Mutex},
+};
 
+use fastembed::TextRerank;
+use model2vec_rs::model::StaticModel;
 use regex::Regex;
 use rust_stemmers::{Algorithm, Stemmer};
 
-use model2vec_rs::model::StaticModel;
-
-use crate::{chunk::Chunk, embed};
+use crate::{chunk::Chunk, embed, rerank};
 
 /// BM25 term-frequency saturation and length normalisation (standard values).
 const K1: f32 = 1.2;
@@ -102,20 +105,77 @@ pub enum Fusion {
 #[derive(Debug, Clone, Copy)]
 pub struct RankConfig {
     pub fusion: Fusion,
-    /// Passages scoring below this fraction of the best one are left out.
+    /// Without reranking: passages scoring below this fraction of the best
+    /// one are left out.
     pub min_relative: f32,
+    /// How many of the best fused candidates the cross-encoder rescores,
+    /// when a reranker is passed in (0 = never rerank).
+    pub rerank_top: usize,
+    /// With reranking: the cut-off applied to reranker scores instead.
+    pub rerank_min_relative: f32,
 }
 
 impl Default for RankConfig {
-    /// From `eval --sweep` on 15 cases: weighted fusion with the embedding
-    /// score dominant ranked the answer first in 14/15 at ~1,070 tokens.
-    /// RRF ranked as well, but its flat scores make the relative cut-off
-    /// ineffective, so replies fill the budget (~1,600–1,760 tokens).
+    /// Fusion: from `eval --sweep` on 15 cases, weighted fusion with the
+    /// embedding score dominant ranked the answer first in 14/15 at ~1,070
+    /// tokens. RRF ranked as well, but its flat scores make the relative
+    /// cut-off ineffective, so replies fill the budget (~1,600–1,760 tokens).
+    ///
+    /// Reranking (opt-in): Jina v2 on the top 6 with a 0.5 cut-off kept every
+    /// answer (top 13/15) at ~760 tokens, 33% fewer, for ~300 ms.
     fn default() -> Self {
         Self {
             fusion: Fusion::Weighted { bm25_weight: 0.3 },
             min_relative: 0.7,
+            rerank_top: 6,
+            rerank_min_relative: 0.5,
         }
+    }
+}
+
+/// The optional models ranking can use; any of them may be missing.
+#[derive(Clone, Copy, Default)]
+pub struct Models<'a> {
+    pub embedder: Option<&'a StaticModel>,
+    pub reranker: Option<&'a Mutex<TextRerank>>,
+}
+
+/// Chunk scores plus the relative cut-off that suits them.
+pub struct Ranked {
+    pub scores: Vec<f32>,
+    pub min_relative: f32,
+}
+
+/// Full ranking: BM25 and embeddings fused, then the best candidates
+/// rescored by the cross-encoder. Chunks that weren't reranked score 0.
+pub fn rank(query: &str, chunks: &[Chunk], models: Models, config: RankConfig) -> Ranked {
+    let fused = hybrid(query, chunks, models.embedder, config.fusion);
+    let fallback = |scores| Ranked {
+        scores,
+        min_relative: config.min_relative,
+    };
+    let Some(reranker) = models.reranker.filter(|_| config.rerank_top > 0) else {
+        return fallback(fused);
+    };
+
+    let mut candidates: Vec<usize> = (0..chunks.len()).filter(|&i| fused[i] > 0.0).collect();
+    candidates.sort_by(|&a, &b| fused[b].total_cmp(&fused[a]));
+    candidates.truncate(config.rerank_top);
+    let texts: Vec<String> = candidates
+        .iter()
+        .map(|&i| scoring_text(&chunks[i]))
+        .collect();
+    let Some(rescored) = rerank::scores(reranker, query, &texts) else {
+        return fallback(fused);
+    };
+
+    let mut scores = vec![0.0; chunks.len()];
+    for (&i, s) in candidates.iter().zip(rescored) {
+        scores[i] = s;
+    }
+    Ranked {
+        scores,
+        min_relative: config.rerank_min_relative,
     }
 }
 

@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc, sync::LazyLock};
 
-use lol_html::{HtmlRewriter, Settings, text};
+use lol_html::{HtmlRewriter, Settings, element, text};
 use regex::Regex;
 use serde_json::Value;
 use spider::url::Url;
@@ -37,7 +37,7 @@ pub struct Extracted {
 /// plus Next.js page data when the HTML itself is an empty shell.
 pub fn extract(url: &str, body: &[u8]) -> Extracted {
     let parsed = Url::parse(url).ok();
-    let embedded = scan_embedded(body);
+    let (embedded, html) = scan(body);
 
     // `clean_html` empties some pages (Wikipedia, Next.js) and `readability`
     // drops headings that chunking relies on, so both stay off; `tidy` removes
@@ -52,7 +52,7 @@ pub fn extract(url: &str, body: &[u8]) -> Extracted {
     };
     let input = TransformInput {
         url: parsed.as_ref(),
-        content: body,
+        content: &html,
         screenshot_bytes: None,
         encoding: None,
         selector_config: None,
@@ -89,16 +89,24 @@ struct Embedded {
     next_data: Option<String>,
 }
 
-/// One streaming pass to pull the title and embedded JSON out of the HTML.
-fn scan_embedded(body: &[u8]) -> Embedded {
+/// One streaming pass that pulls the title and embedded JSON out of the HTML
+/// and returns the HTML without MathML. Formulas otherwise convert to one
+/// character per line; the LaTeX fallback that sites like Wikipedia include
+/// next to the MathML is kept.
+fn scan(body: &[u8]) -> (Embedded, Vec<u8>) {
     let found = Rc::new(RefCell::new(Embedded::default()));
     let title = Rc::new(RefCell::new(String::new()));
     let ld_buf = Rc::new(RefCell::new(String::new()));
     let next_buf = Rc::new(RefCell::new(String::new()));
+    let mut html = Vec::with_capacity(body.len());
 
     let mut rewriter = HtmlRewriter::new(
         Settings {
             element_content_handlers: vec![
+                element!("math", |el| {
+                    el.remove();
+                    Ok(())
+                }),
                 text!("head > title", {
                     let title = title.clone();
                     move |t| {
@@ -129,15 +137,17 @@ fn scan_embedded(body: &[u8]) -> Embedded {
             ],
             ..Settings::new()
         },
-        |_: &[u8]| {},
+        |chunk: &[u8]| html.extend_from_slice(chunk),
     );
-    // Malformed HTML just yields less data; extraction still proceeds.
-    let _ = rewriter.write(body);
-    let _ = rewriter.end();
+    // Malformed HTML yields less data; convert the original instead.
+    let ok = rewriter.write(body).is_ok() && rewriter.end().is_ok();
+    if !ok {
+        html = body.to_vec();
+    }
 
     let mut found = found.take();
     found.title = Some(collapse_ws(&title.borrow()));
-    found
+    (found, html)
 }
 
 /// Short `key: value` lines from a JSON-LD object (or `@graph` / array of them).
@@ -375,6 +385,16 @@ mod tests {
             json_ld_facts(&v),
             vec!["**JobPosting**: hiringOrganization.name: Acme · title: Rust Engineer"]
         );
+    }
+
+    #[test]
+    fn mathml_is_dropped_but_latex_fallback_kept() {
+        let html = br#"<html><body><main><p>Freshness is
+            <span><math><mi>F</mi><mo>=</mo><mn>1</mn></math>
+            <img alt="{\displaystyle F=1}"></span> for fresh pages.</p></main></body></html>"#;
+        let md = extract("https://w.org/", html).markdown;
+        assert!(!md.contains("\nF\n"), "{md}");
+        assert!(md.contains("Freshness is"), "{md}");
     }
 
     #[test]
