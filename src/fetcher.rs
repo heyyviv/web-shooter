@@ -38,10 +38,19 @@ pub struct Fetched {
     pub body: Vec<u8>,
 }
 
+/// Wait before retrying a server error.
+const RETRY_DELAY: Duration = Duration::from_millis(500);
+
 /// Fetch one page over plain HTTP. Accepts bare domains like `example.com`.
+/// A server error (5xx, including timeouts reported as 524) is retried once:
+/// they are often transient.
 pub async fn fetch(client: &Client, url: &str) -> Fetched {
     let url = normalize(url);
-    let page = Page::new_page(&url, client).await;
+    let mut page = Page::new_page(&url, client).await;
+    if page.status_code.is_server_error() {
+        tokio::time::sleep(RETRY_DELAY).await;
+        page = Page::new_page(&url, client).await;
+    }
     let final_url = match page.get_url_final() {
         "" => url,
         u => u.to_string(),

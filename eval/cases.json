@@ -1,58 +1,97 @@
 [
   {
     "name": "wiki-revisit",
-    "urls": ["https://en.wikipedia.org/wiki/Web_crawler"],
+    "urls": [
+      "https://en.wikipedia.org/wiki/Web_crawler"
+    ],
     "query": "how do crawlers decide when to revisit a page",
-    "expect": ["Proportional policy"]
+    "expect": [
+      "Proportional policy"
+    ]
   },
   {
     "name": "wiki-politeness-delay",
-    "urls": ["https://en.wikipedia.org/wiki/Web_crawler"],
+    "urls": [
+      "https://en.wikipedia.org/wiki/Web_crawler"
+    ],
     "query": "how long should a crawler wait between requests to the same server",
-    "expect": ["60 seconds"]
+    "expect": [
+      "60 seconds"
+    ]
   },
   {
     "name": "wiki-deep-web",
-    "urls": ["https://en.wikipedia.org/wiki/Web_crawler"],
+    "urls": [
+      "https://en.wikipedia.org/wiki/Web_crawler"
+    ],
     "query": "finding pages hidden behind search forms",
-    "expect": ["deep web"]
+    "expect": [
+      "deep web"
+    ]
   },
   {
     "name": "pg-choose-work",
-    "urls": ["https://www.paulgraham.com/greatwork.html"],
+    "urls": [
+      "https://www.paulgraham.com/greatwork.html"
+    ],
     "query": "how to choose what to work on",
-    "keywords": ["curiosity", "interest"],
-    "expect": ["Curiosity is the best guide"]
+    "keywords": [
+      "curiosity",
+      "interest"
+    ],
+    "expect": [
+      "Curiosity is the best guide"
+    ]
   },
   {
     "name": "pg-procrastination",
-    "urls": ["https://www.paulgraham.com/greatwork.html"],
+    "urls": [
+      "https://www.paulgraham.com/greatwork.html"
+    ],
     "query": "avoiding procrastination and getting started",
-    "expect": ["procrastinat"]
+    "expect": [
+      "procrastinat"
+    ]
   },
   {
     "name": "rust-variadics",
-    "urls": ["https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/"],
+    "urls": [
+      "https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/"
+    ],
     "query": "write C variadic functions in Rust",
-    "expect": ["VaList"]
+    "expect": [
+      "VaList"
+    ]
   },
   {
     "name": "nextjs-chunking",
-    "urls": ["https://nextjs.org/blog"],
+    "urls": [
+      "https://nextjs.org/blog"
+    ],
     "query": "how does turbopack split javascript into chunks",
-    "expect": ["How Turbopack chunks your JavaScript"]
+    "expect": [
+      "How Turbopack chunks your JavaScript"
+    ]
   },
   {
     "name": "react-existing-page",
-    "urls": ["https://react.dev/"],
+    "urls": [
+      "https://react.dev/"
+    ],
     "query": "use react inside an existing website without rewriting it",
-    "expect": ["Add React to your existing HTML page"]
+    "expect": [
+      "Add React to your existing HTML page"
+    ]
   },
   {
     "name": "greenhouse-rl-role",
-    "urls": ["https://job-boards.greenhouse.io/anthropic"],
+    "urls": [
+      "https://job-boards.greenhouse.io/anthropic"
+    ],
     "query": "reinforcement learning research engineer job",
-    "expect": ["Cybersecurity RL"]
+    "expect": [
+      "Cybersecurity RL"
+    ]
   },
   {
     "name": "multi-page-politeness",
@@ -62,36 +101,98 @@
       "https://en.wikipedia.org/wiki/Web_crawler"
     ],
     "query": "crawler politeness delay between requests",
-    "expect": ["60 seconds"]
+    "expect": [
+      "60 seconds"
+    ]
   },
   {
     "name": "para-bot-identity",
-    "urls": ["https://en.wikipedia.org/wiki/Web_crawler"],
+    "urls": [
+      "https://en.wikipedia.org/wiki/Web_crawler"
+    ],
     "query": "how do bots tell site owners who is visiting",
-    "expect": ["identify themselves"]
+    "expect": [
+      "identify themselves"
+    ]
   },
   {
     "name": "para-update-schedule",
-    "urls": ["https://en.wikipedia.org/wiki/Web_crawler"],
+    "urls": [
+      "https://en.wikipedia.org/wiki/Web_crawler"
+    ],
     "query": "which update schedule keeps stored copies most current",
-    "expect": ["uniform policy outperforms"]
+    "expect": [
+      "uniform policy outperforms"
+    ]
   },
   {
     "name": "para-leave-field",
-    "urls": ["https://www.paulgraham.com/greatwork.html"],
+    "urls": [
+      "https://www.paulgraham.com/greatwork.html"
+    ],
     "query": "is it ok to leave my area for a more thrilling one",
-    "expect": ["afraid to switch"]
+    "expect": [
+      "afraid to switch"
+    ]
   },
   {
     "name": "para-motivation",
-    "urls": ["https://www.paulgraham.com/greatwork.html"],
+    "urls": [
+      "https://www.paulgraham.com/greatwork.html"
+    ],
     "query": "staying motivated and in good spirits during long projects",
-    "expect": ["Husband your morale"]
+    "expect": [
+      "Husband your morale"
+    ]
   },
   {
     "name": "para-variadic",
-    "urls": ["https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/"],
+    "urls": [
+      "https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/"
+    ],
     "query": "functions taking an unknown count of parameters",
-    "expect": ["VaList"]
+    "expect": [
+      "VaList"
+    ]
+  },
+  {
+    "name": "real-zoho-experience",
+    "urls": [
+      "https://onebyzero.zohorecruit.com/jobs/Careers/756100000013063193/Applied-AI-Engineer?source=CareerSite"
+    ],
+    "query": "years of experience required skills",
+    "expect": [
+      "3–6 years of experience"
+    ]
+  },
+  {
+    "name": "real-amazon-json-sde",
+    "urls": [
+      "https://www.amazon.jobs/en/search.json?base_query=software%20development%20engineer&country=IND&city=Bengaluru&sort=recent&result_limit=50"
+    ],
+    "query": "software development engineer Bengaluru",
+    "expect": [
+      "Engineer"
+    ]
+  },
+  {
+    "name": "real-google-location",
+    "urls": [
+      "https://www.google.com/about/careers/applications/jobs/results/118479391092024006-software-engineer/"
+    ],
+    "query": "job location office city",
+    "expect": [
+      "Bengaluru, Karnataka, India"
+    ]
+  },
+  {
+    "name": "real-google-qualifications",
+    "urls": [
+      "https://www.google.com/about/careers/applications/jobs/results/118479391092024006-software-engineer/"
+    ],
+    "query": "minimum qualifications experience",
+    "expect": [
+      "Minimum qualifications"
+    ]
   }
 ]

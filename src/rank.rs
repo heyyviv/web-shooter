@@ -8,7 +8,10 @@ use model2vec_rs::model::StaticModel;
 use regex::Regex;
 use rust_stemmers::{Algorithm, Stemmer};
 
-use crate::{chunk::Chunk, embed, rerank};
+use crate::{
+    chunk::{Chunk, MD_LINK},
+    embed, rerank,
+};
 
 /// BM25 term-frequency saturation and length normalisation (standard values).
 const K1: f32 = 1.2;
@@ -113,6 +116,14 @@ pub struct RankConfig {
     pub rerank_top: usize,
     /// With reranking: the cut-off applied to reranker scores instead.
     pub rerank_min_relative: f32,
+    /// How much a passage that is all link text is down-weighted (0 = not
+    /// at all, 1 = to zero). Link lists such as "other jobs" sidebars match
+    /// many queries by their titles without answering them.
+    pub link_penalty: f32,
+    /// How much a very short passage (`SHORT_CHUNK_WORDS` or fewer) is
+    /// down-weighted. Such passages are mostly navigation ("Back to jobs
+    /// search"), and BM25's length normalisation over-rewards them.
+    pub short_penalty: f32,
 }
 
 impl Default for RankConfig {
@@ -129,6 +140,8 @@ impl Default for RankConfig {
             min_relative: 0.7,
             rerank_top: 6,
             rerank_min_relative: 0.5,
+            link_penalty: 0.5,
+            short_penalty: 0.5,
         }
     }
 }
@@ -149,7 +162,11 @@ pub struct Ranked {
 /// Full ranking: BM25 and embeddings fused, then the best candidates
 /// rescored by the cross-encoder. Chunks that weren't reranked score 0.
 pub fn rank(query: &str, chunks: &[Chunk], models: Models, config: RankConfig) -> Ranked {
-    let fused = hybrid(query, chunks, models.embedder, config.fusion);
+    let fused: Vec<f32> = hybrid(query, chunks, models.embedder, config.fusion)
+        .into_iter()
+        .zip(chunks)
+        .map(|(s, c)| s * shape_factor(c, config))
+        .collect();
     let fallback = |scores| Ranked {
         scores,
         min_relative: config.min_relative,
@@ -171,7 +188,7 @@ pub fn rank(query: &str, chunks: &[Chunk], models: Models, config: RankConfig) -
 
     let mut scores = vec![0.0; chunks.len()];
     for (&i, s) in candidates.iter().zip(rescored) {
-        scores[i] = s;
+        scores[i] = s * shape_factor(&chunks[i], config);
     }
     Ranked {
         scores,
@@ -246,6 +263,40 @@ pub fn absolute(query: &str, texts: &[String], model: Option<&StaticModel>) -> V
         .collect()
 }
 
+/// Passages with at most this many words count as very short.
+const SHORT_CHUNK_WORDS: usize = 6;
+
+/// Score multiplier for a passage's shape (link list, very short), applied
+/// in both ranking modes.
+fn shape_factor(chunk: &Chunk, config: RankConfig) -> f32 {
+    let short = if chunk.text.split_whitespace().count() <= SHORT_CHUNK_WORDS {
+        1.0 - config.short_penalty
+    } else {
+        1.0
+    };
+    short * link_list_factor(&chunk.text, config.link_penalty)
+}
+
+/// A passage is a link list if it has at least this many links…
+const LINK_LIST_MIN_LINKS: usize = 3;
+/// …and fewer than this many letters and digits outside them. A real
+/// sentence next to a few links (common on landing pages) stays prose.
+const LINK_LIST_MAX_PROSE: usize = 100;
+
+/// Score multiplier for a passage: `1 − penalty` for link lists, else 1.
+fn link_list_factor(text: &str, penalty: f32) -> f32 {
+    let prose = MD_LINK
+        .replace_all(text, "")
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .count();
+    if MD_LINK.find_iter(text).count() >= LINK_LIST_MIN_LINKS && prose < LINK_LIST_MAX_PROSE {
+        1.0 - penalty
+    } else {
+        1.0
+    }
+}
+
 /// Scale scores to 0..1 over the call; all zeros if they are all equal.
 fn min_max(scores: &[f32]) -> Vec<f32> {
     let lo = scores.iter().copied().fold(f32::INFINITY, f32::min);
@@ -296,6 +347,16 @@ mod tests {
         let s = bm25("how to install", &chunks);
         assert!(s[1] > s[2] && s[2] > s[0], "{s:?}");
         assert_eq!(s[0], 0.0);
+    }
+
+    #[test]
+    fn only_link_lists_are_penalised() {
+        let list = "[A](https://x/a)\n[B](https://x/b)\n[C](https://x/c)";
+        assert_eq!(link_list_factor(list, 0.5), 0.5);
+        let with_prose = format!(
+            "{list}\nYou don't have to build your whole page in React. Add React to your existing HTML page, and render interactive React components anywhere on it."
+        );
+        assert_eq!(link_list_factor(&with_prose, 0.5), 1.0);
     }
 
     #[test]

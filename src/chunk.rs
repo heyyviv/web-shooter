@@ -22,8 +22,6 @@ pub struct Chunk {
     pub text: String,
 }
 
-static LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\([^)]*\)").unwrap());
-
 /// Back-matter sections: citation lists that match many queries by accident
 /// and cost a lot of tokens. Compared case-insensitively against each heading.
 const SKIP_SECTIONS: &[&str] = &[
@@ -40,6 +38,21 @@ const SKIP_SECTIONS: &[&str] = &[
 fn is_back_matter(heading: &str) -> bool {
     let h = heading.to_lowercase();
     SKIP_SECTIONS.contains(&h.as_str())
+}
+
+/// A markdown link; the URL may contain one level of parentheses, as in
+/// `https://en.wikipedia.org/wiki/Search_engine_(computing)`.
+pub static MD_LINK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\((?:[^()]|\([^)]*\))*\)").unwrap());
+
+/// Share of letters and digits that sit outside markdown links (link text and URLs).
+pub fn prose_share(markdown: &str) -> f32 {
+    let alnum = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).count();
+    let total = alnum(markdown);
+    if total == 0 {
+        return 0.0;
+    }
+    alnum(&MD_LINK.replace_all(markdown, "")) as f32 / total as f32
 }
 
 /// Split a page's markdown into chunks at headings and at about `TARGET_BYTES`.
@@ -124,7 +137,7 @@ fn heading(line: &str) -> Option<(usize, String)> {
     if level == 0 || level > 6 || !line[level..].starts_with(' ') {
         return None;
     }
-    let text = LINK
+    let text = MD_LINK
         .replace_all(line[level..].trim(), "$1")
         .replace("**", "");
     let text = text.trim();
@@ -134,6 +147,14 @@ fn heading(line: &str) -> Option<(usize, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prose_share_ignores_link_text_and_urls() {
+        let list = "* [Search](https://w.org/Search_(computing))\n";
+        assert_eq!(prose_share(&list.repeat(50)), 0.0);
+        assert_eq!(prose_share("Ranks pages."), 1.0);
+        assert_eq!(prose_share("abcd [ef](g)"), 4.0 / 7.0);
+    }
 
     #[test]
     fn chunks_carry_heading_path() {

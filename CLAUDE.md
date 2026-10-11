@@ -9,13 +9,13 @@ Milestones M0–M4 and M6 are done. Three tools:
 - `links` lists a page's links, ranked by a query if given.
 - `crawl` does a best-first crawl from a start page and returns the most relevant pages as URLs with one-line snippets.
 
-M7 is in progress. The single-page benchmark is done; see "Benchmark results" below. Milestones are listed under "Plan" below.
+M7 is in progress. The single-page benchmark is done; see "Benchmark results" below. After the user's first real use (job search), `fetch` also reads JSON API responses and the data embedded in JavaScript-shell pages, and the eval has 4 real-use cases (19 total, 17 pass). Milestones are listed under "Plan" below.
 
 ## Commands
 
 - Build: `cargo build` (release: `cargo build --release`)
 - Test: `cargo test`
-- Debug extraction on one page: `cargo run --example probe -- <url> [variant]`. It prints the size of each converter setting to stderr; pass `final` (or `plain`, `main`, `readability`, …) to print that markdown.
+- Debug extraction on one page: `cargo run --example probe -- <url> [variant]`. It prints the size of each converter setting and the extraction time to stderr; pass `final` (or `plain`, `main`, `readability`, …) to print that markdown, or `rank "<query>"` to print the top 8 chunks with their scores.
 - Ranking test set: `cargo run --release --example eval` (`-v` prints output for failed cases, `--refresh` refetches page snapshots, `--precise` adds the reranker, `--sweep` compares reranker settings, `--bm25` ranks without embeddings). Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
 - Benchmark against Firecrawl and Jina Reader (live network, ~14 Firecrawl credits per run): `FIRECRAWL_API_KEY=… cargo run --release --example bench`. Never write the key into the repo.
 - Run as MCP server: `./target/debug/web-shooter` (speaks JSON-RPC on stdin/stdout, so log only to stderr)
@@ -28,7 +28,8 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 - `src/server.rs`: `WebShooter`, the MCP handler. It holds the shared HTTP client. Every tool is registered in its `#[tool_router]` impl, which delegates to `src/tools/`.
 - `src/tools/<name>.rs`: each tool's parameter struct (doc comments become the JSON schema the LLM sees, so keep them short) and its `run` function.
 - `src/fetcher.rs`: the HTTP client (via `spider::reqwest`) and single-page fetch through `spider::page::Page::new_page`.
-- `src/extract.rs`: HTML → markdown. It reads the title, canonical URL, JSON-LD, `__NEXT_DATA__` and links in one `lol_html` pass, converts with `spider_transformations`, then cleans up the result in `tidy`.
+- `src/data.rs`: JSON → markdown. Arrays of objects become one `##` section per record (title from a `title`/`name`-like key), short fields on one line, long or HTML fields as text. Also finds JSON in inline scripts (`JSON.parse('…')` strings, `= {…}` literals, JSON script bodies).
+- `src/extract.rs`: HTML → markdown. A JSON response is rendered with `data::render` instead. It reads the title, canonical URL, JSON-LD, `__NEXT_DATA__` and links in one `lol_html` pass, converts with `spider_transformations`, then cleans up the result in `tidy`.
 - `src/links.rs`: `Link` (URL, anchor text, heading above it), URL normalisation and filtering, same-site checks.
 - `src/tools/links.rs`, `src/tools/crawl.rs`: the `links` and `crawl` tools. `crawl` keeps a `BinaryHeap` frontier; a link's priority is 0.7 × its own text score + 0.3 × the relevance of the page it was found on, both from `rank::absolute`.
 - `src/chunk.rs`: splits markdown into ~200-token chunks at headings, each with its heading path. Skips back-matter sections (References, Notes, External links…).
@@ -63,6 +64,11 @@ Caveats: these are the same cases the ranking was tuned on; there was one run, s
 - `fastembed` is built with `default-features = false` and rustls features. Its default cache is `./.fastembed_cache` relative to the working directory, so `rerank.rs` points it at the Hugging Face cache.
 - The reranker is opt-in (`precise: true`), not on by default as first planned. On the eval it didn't beat embeddings at ranking (top 13/15 vs 14/15) and adds ~300 ms, though it cuts tokens by ~33%. Jina v1 turbo was faster but worse (top 8/15); BGE base was slower and worse. Its model is ~1.1 GB.
 - Fusion is a min-max-normalised weighted sum, not RRF as first planned. RRF ranked as well in the eval, but its flat scores defeat the relative cut-off, so replies filled the budget.
+- Pages whose markdown has under 200 visible characters are treated as JavaScript shells: every inline script that can hold data (no `src`, JS or JSON type) is searched with `data::embedded_json` and rendered. Keys containing `/` are skipped, because they are asset manifests (Zoho's ran to 1.6 MB of markdown).
+- Some sites have no page data in the HTML at all (Oracle HCM such as Stanford's careers site, Atlassian) or use bot checks (Uber via Cloudflare). Those need the v2 Chrome fallback, or the site's JSON API URL passed to `fetch`.
+- Icon-font glyph names ("place", "arrow_back") are replaced with a space in the `lol_html` pass: aria-hidden `<i>`/`<span>` and Material icon classes. Aria-hidden `<script>` is left alone because it can hold page data.
+- `rank::rank` multiplies scores by `shape_factor` in both modes: link lists (3+ links and under 100 letters/digits outside them) × 0.5, very short passages (≤ 6 words, usually navigation) × 0.5.
+- The HTTP client sends browser `Accept`/`Accept-Language` headers (uber.com returned 406 without them) and retries a 5xx once after 500 ms.
 - `fetch` and `links` do not check robots.txt: they read pages the client asked for by URL, like a browser. `crawl` checks robots.txt for every page it discovers (not the start page), using `spider::packages::robotparser::parser::RobotFileParser` with `fetcher::USER_AGENT`.
 - `crawl` limits: 4 concurrent fetches, 30 s, `max_pages` (default 30, max 200), `max_depth` (default 3), same site unless `other_sites`. It stops early after 12 pages in a row that don't enter the top results.
 - `crawl` leaves "thin" pages (less than 15% of their letters and digits outside links: indexes, link lists, Wikipedia's "What links here") out of the results but still follows their links. Duplicates are dropped by canonical URL, then by content hash.

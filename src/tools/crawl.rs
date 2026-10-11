@@ -13,7 +13,7 @@ use serde::Deserialize;
 use spider::{packages::robotparser::parser::RobotFileParser, reqwest::Client, url::Url};
 
 use crate::{
-    chunk::{Chunk, chunk},
+    chunk::{Chunk, MD_LINK, chunk, prose_share},
     links::{self, Link},
     models::ModelSet,
     pack::PageOut,
@@ -53,10 +53,6 @@ const THIN_PAGE_PROSE_SHARE: f32 = 0.15;
 /// Characters of the best passage shown under each result.
 const SNIPPET_CHARS: usize = 200;
 
-/// A markdown link; the URL may contain one level of parentheses, as in
-/// `https://en.wikipedia.org/wiki/Search_engine_(computing)`.
-static MD_LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\((?:[^()]|\([^)]*\))*\)").unwrap());
 /// The `](url)` left over when a link's text spans lines.
 static LINK_TAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\]\([^)]*\)\[?").unwrap());
 
@@ -365,16 +361,6 @@ fn results(
     out
 }
 
-/// Share of letters and digits that sit outside markdown links (link text and URLs).
-fn prose_share(markdown: &str) -> f32 {
-    let alnum = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).count();
-    let total = alnum(markdown);
-    if total == 0 {
-        return 0.0;
-    }
-    alnum(&MD_LINK.replace_all(markdown, "")) as f32 / total as f32
-}
-
 /// One line: the passage's headings and the start of its text, as plain
 /// text (no links, emphasis or quote markers).
 fn snippet(chunk: &Chunk) -> String {
@@ -426,14 +412,6 @@ mod tests {
         assert!(enters_top(&mut top, 0.4, 2));
         top.sort_by(f32::total_cmp);
         assert_eq!(top, vec![0.4, 0.5]);
-    }
-
-    #[test]
-    fn prose_share_ignores_link_text_and_urls() {
-        let list = "* [Search](https://w.org/Search_(computing))\n";
-        assert_eq!(prose_share(&list.repeat(50)), 0.0);
-        assert_eq!(prose_share("Ranks pages."), 1.0);
-        assert_eq!(prose_share("abcd [ef](g)"), 4.0 / 7.0);
     }
 
     #[test]

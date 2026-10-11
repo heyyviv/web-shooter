@@ -1,4 +1,5 @@
-//! Debug extraction on one URL: `cargo run --example probe -- <url> [variant]`.
+//! Debug extraction on one URL: `cargo run --example probe -- <url> [variant]`,
+//! or see how chunks rank: `cargo run --example probe -- <url> rank "<query>"`.
 use spider_transformations::transformation::content::{
     ReturnFormat, TransformConfig, TransformInput, transform_content_input,
 };
@@ -46,7 +47,34 @@ async fn main() -> anyhow::Result<()> {
             md.chars().take(80).collect::<String>()
         );
     }
+    let started = std::time::Instant::now();
     let e = web_shooter::extract::extract(&f.url, &f.body);
+    eprintln!("extract took {} ms", started.elapsed().as_millis());
+    if variant == "rank" {
+        let query = args.next().expect("query");
+        let chunks = web_shooter::chunk::chunk(0, &e.markdown);
+        let embedder = web_shooter::embed::load();
+        let models = web_shooter::rank::Models {
+            embedder: embedder.as_ref(),
+            reranker: None,
+        };
+        let ranked = web_shooter::rank::rank(&query, &chunks, models, Default::default());
+        let mut order: Vec<usize> = (0..chunks.len()).collect();
+        order.sort_by(|&a, &b| ranked.scores[b].total_cmp(&ranked.scores[a]));
+        let top = ranked.scores[order[0]];
+        for &i in order.iter().take(8) {
+            let c = &chunks[i];
+            let text: String = c.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            println!(
+                "{:.2} [{}] {} | {}",
+                ranked.scores[i] / top,
+                c.index,
+                c.heading_path,
+                text.chars().take(110).collect::<String>()
+            );
+        }
+        return Ok(());
+    }
     if variant == "final" {
         println!("{}", e.markdown);
     }

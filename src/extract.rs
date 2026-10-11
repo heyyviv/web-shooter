@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc, sync::LazyLock};
 
-use lol_html::{HtmlRewriter, Settings, element, text};
+use lol_html::{HtmlRewriter, Settings, element, html_content::ContentType, text};
 use regex::Regex;
 use serde_json::Value;
 use spider::url::Url;
@@ -8,7 +8,10 @@ use spider_transformations::transformation::content::{
     ReturnFormat, TransformConfig, TransformInput, transform_content_input,
 };
 
-use crate::links::{self, Link};
+use crate::{
+    data,
+    links::{self, Link},
+};
 
 /// Below this many characters of visible text, the page is treated as an
 /// empty client-side shell and embedded page data is used instead.
@@ -39,10 +42,23 @@ pub struct Extracted {
     pub canonical: Option<String>,
 }
 
-/// Turn raw HTML into compact markdown: main content, plus JSON-LD facts,
-/// plus Next.js page data when the HTML itself is an empty shell.
+/// Embedded page data rendered for an empty shell is cut at this size.
+const MAX_SHELL_DATA_CHARS: usize = 1 << 20;
+
+/// Turn a response into compact markdown. JSON (an API response) is
+/// rendered record by record. HTML becomes its main content plus JSON-LD
+/// facts, plus the data embedded in its scripts when the HTML itself is an
+/// empty JavaScript shell.
 pub fn extract(url: &str, body: &[u8]) -> Extracted {
     let parsed = Url::parse(url).ok();
+    if let Some(value) = json_body(body) {
+        return Extracted {
+            title: None,
+            markdown: data::render(&value),
+            links: Vec::new(),
+            canonical: None,
+        };
+    }
     let (embedded, html) = scan(body);
 
     // `clean_html` empties some pages (Wikipedia, Next.js) and `readability`
@@ -67,19 +83,30 @@ pub fn extract(url: &str, body: &[u8]) -> Extracted {
     let mut markdown = tidy(&transform_content_input(input, &config));
 
     let facts: Vec<String> = embedded
-        .json_ld
+        .scripts
         .iter()
-        .filter_map(|raw| serde_json::from_str::<Value>(raw).ok())
+        .filter(|s| s.kind == "application/ld+json")
+        .filter_map(|s| serde_json::from_str::<Value>(&s.text).ok())
         .flat_map(|v| json_ld_facts(&v))
         .collect();
     if !facts.is_empty() {
         markdown = format!("{}\n\n{}", facts.join("\n"), markdown);
     }
 
-    if visible_chars(&markdown) < EMPTY_SHELL_CHARS
-        && let Some(text) = embedded.next_data.as_deref().and_then(next_data_text)
-    {
-        markdown = format!("{markdown}\n\n{text}");
+    if visible_chars(&markdown) < EMPTY_SHELL_CHARS {
+        let mut page_data = String::new();
+        for script in embedded.scripts.iter().filter(|s| s.may_hold_data()) {
+            for value in data::embedded_json(&script.text) {
+                page_data.push_str(&data::render(&value));
+                page_data.push_str("\n\n");
+            }
+            if page_data.len() > MAX_SHELL_DATA_CHARS {
+                break;
+            }
+        }
+        if !page_data.trim().is_empty() {
+            markdown = format!("{markdown}\n\n{}", page_data.trim());
+        }
     }
 
     Extracted {
@@ -101,25 +128,51 @@ pub fn extract(url: &str, body: &[u8]) -> Extracted {
     }
 }
 
+/// An inline `<script>`: its `type` (lowercased, empty if absent) and body.
+struct Script {
+    kind: String,
+    text: String,
+}
+
+impl Script {
+    /// Scripts that can carry page data: JSON and JavaScript. JSON-LD is read
+    /// separately; HTML templates and the like are not data.
+    fn may_hold_data(&self) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "" | "text/javascript" | "application/javascript" | "module" | "application/json"
+        )
+    }
+}
+
+/// The body as JSON, if the response is a JSON document rather than HTML.
+fn json_body(body: &[u8]) -> Option<Value> {
+    let first = body.iter().find(|b| !b.is_ascii_whitespace())?;
+    if !matches!(first, b'{' | b'[') {
+        return None;
+    }
+    serde_json::from_slice(body).ok()
+}
+
 #[derive(Default)]
 struct Embedded {
     title: Option<String>,
-    json_ld: Vec<String>,
-    next_data: Option<String>,
+    /// Inline scripts only; `<script src=…>` is skipped.
+    scripts: Vec<Script>,
     /// `(href, anchor text, heading above)` before resolving.
     links: Vec<(String, String, String)>,
     canonical: Option<String>,
 }
 
 /// One streaming pass that pulls the title, embedded JSON and links out of
-/// the HTML and returns the HTML without MathML. Formulas otherwise convert to one
+/// the HTML and returns the HTML without MathML or icon-font glyph names. Formulas otherwise convert to one
 /// character per line; the LaTeX fallback that sites like Wikipedia include
 /// next to the MathML is kept.
 fn scan(body: &[u8]) -> (Embedded, Vec<u8>) {
     let found = Rc::new(RefCell::new(Embedded::default()));
     let title = Rc::new(RefCell::new(String::new()));
-    let ld_buf = Rc::new(RefCell::new(String::new()));
-    let next_buf = Rc::new(RefCell::new(String::new()));
+    // Whether the script being read is inline (text handlers append to the last script).
+    let in_inline_script = Rc::new(RefCell::new(false));
     let heading = Rc::new(RefCell::new(String::new()));
     let mut html = Vec::with_capacity(body.len());
 
@@ -130,6 +183,17 @@ fn scan(body: &[u8]) -> (Embedded, Vec<u8>) {
                     el.remove();
                     Ok(())
                 }),
+                // Icon fonts render words as glyphs ("place", "arrow_back");
+                // as text they are noise. Icons are marked aria-hidden or use
+                // a Material icon class.
+                element!(
+                    r#"i[aria-hidden="true"], span[aria-hidden="true"], [class*="material-icons"], [class*="material-symbols"]"#,
+                    |el| {
+                        // A space, so the words on either side don't merge.
+                        el.replace(" ", ContentType::Text);
+                        Ok(())
+                    }
+                ),
                 element!("h1, h2, h3, h4, h5, h6", {
                     let heading = heading.clone();
                     move |_| {
@@ -180,22 +244,28 @@ fn scan(body: &[u8]) -> (Embedded, Vec<u8>) {
                         Ok(())
                     }
                 }),
-                text!(r#"script[type="application/ld+json"]"#, {
-                    let (found, buf) = (found.clone(), ld_buf.clone());
-                    move |t| {
-                        buf.borrow_mut().push_str(t.as_str());
-                        if t.last_in_text_node() {
-                            found.borrow_mut().json_ld.push(buf.take());
+                element!("script", {
+                    let (found, inline) = (found.clone(), in_inline_script.clone());
+                    move |el| {
+                        let is_inline = !el.has_attribute("src");
+                        *inline.borrow_mut() = is_inline;
+                        if is_inline {
+                            let kind = el.get_attribute("type").unwrap_or_default();
+                            found.borrow_mut().scripts.push(Script {
+                                kind: kind.trim().to_ascii_lowercase(),
+                                text: String::new(),
+                            });
                         }
                         Ok(())
                     }
                 }),
-                text!("script#__NEXT_DATA__", {
-                    let (found, buf) = (found.clone(), next_buf.clone());
+                text!("script", {
+                    let (found, inline) = (found.clone(), in_inline_script.clone());
                     move |t| {
-                        buf.borrow_mut().push_str(t.as_str());
-                        if t.last_in_text_node() {
-                            found.borrow_mut().next_data = Some(buf.take());
+                        if *inline.borrow()
+                            && let Some(script) = found.borrow_mut().scripts.last_mut()
+                        {
+                            script.text.push_str(t.as_str());
                         }
                         Ok(())
                     }
@@ -275,32 +345,6 @@ fn flatten_scalars(prefix: &str, v: &Value, out: &mut Vec<String>) {
         }
         Value::Number(n) => out.push(format!("{prefix}: {n}")),
         Value::Bool(_) | Value::Null => {}
-    }
-}
-
-/// Readable strings from Next.js `pageProps`, for pages whose HTML is an empty shell.
-fn next_data_text(raw: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(raw).ok()?;
-    let props = v.pointer("/props/pageProps")?;
-    let mut lines = Vec::new();
-    collect_prose(props, &mut lines);
-    let mut seen = std::collections::HashSet::new();
-    lines.retain(|l| seen.insert(l.clone()));
-    (!lines.is_empty()).then(|| lines.join("\n\n"))
-}
-
-/// Strings that look like prose (several words), skipping ids, URLs and slugs.
-fn collect_prose(v: &Value, out: &mut Vec<String>) {
-    match v {
-        Value::Object(map) => map.values().for_each(|c| collect_prose(c, out)),
-        Value::Array(items) => items.iter().for_each(|c| collect_prose(c, out)),
-        Value::String(s) => {
-            let s = collapse_ws(s);
-            if s.split(' ').count() >= 4 && !s.starts_with("http") {
-                out.push(s);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -384,7 +428,7 @@ fn push_text(buf: &mut String, chunk: &lol_html::html_content::TextChunk) {
     }
 }
 
-fn decode_entities(s: &str) -> String {
+pub(crate) fn decode_entities(s: &str) -> String {
     ENTITY
         .replace_all(s, |c: &regex::Captures| {
             decode_entity(&c[1]).unwrap_or_else(|| c[0].to_string())
@@ -502,6 +546,15 @@ mod tests {
     }
 
     #[test]
+    fn icon_glyph_names_are_dropped() {
+        let html = br#"<html><body><main><p>Google<i class="google-material-icons" aria-hidden='true'>place</i>Bengaluru, Karnataka, India</p>
+            <p><span class="material-symbols-outlined">arrow_back</span>Back to jobs</p></main></body></html>"#;
+        let md = extract("https://x.org/", html).markdown;
+        assert!(md.contains("Google Bengaluru, Karnataka, India"), "{md}");
+        assert!(!md.contains("place") && !md.contains("arrow"), "{md}");
+    }
+
+    #[test]
     fn mathml_is_dropped_but_latex_fallback_kept() {
         let html = br#"<html><body><main><p>Freshness is
             <span><math><mi>F</mi><mo>=</mo><mn>1</mn></math>
@@ -512,14 +565,44 @@ mod tests {
     }
 
     #[test]
-    fn next_data_used_only_for_empty_shell() {
+    fn shell_pages_use_embedded_script_data() {
         let html = br#"<html><head><title>App</title></head><body><div id="root"></div>
             <script id="__NEXT_DATA__" type="application/json">
-            {"props":{"pageProps":{"id":"x1","post":{"body":"This is the real article text."}}}}
-            </script></body></html>"#;
+            {"props":{"pageProps":{"post":{"body":"This is the real article text."}}}}
+            </script>
+            <script>var jobs = JSON.parse('[{\x22Posting_Title\x22:\x22Applied AI Engineer\x22,\x22City\x22:\x22Bangalore\x22}]');</script>
+            <script type="text/html"><p>template, not data</p></script>
+            </body></html>"#;
         let e = extract("https://app.example/", html);
         assert_eq!(e.title.as_deref(), Some("App"));
-        assert!(e.markdown.contains("This is the real article text."));
-        assert!(!e.markdown.contains("x1"));
+        assert!(
+            e.markdown.contains("This is the real article text."),
+            "{}",
+            e.markdown
+        );
+        assert!(
+            e.markdown
+                .contains("## Applied AI Engineer\nCity: Bangalore"),
+            "{}",
+            e.markdown
+        );
+        assert!(!e.markdown.contains("template"), "{}", e.markdown);
+    }
+
+    #[test]
+    fn pages_with_content_ignore_script_data() {
+        let html = format!(
+            "<html><body><main><p>{}</p></main><script>window.s = {{\"secret\": \"config\"}};</script></body></html>",
+            "Real visible text. ".repeat(20)
+        );
+        let e = extract("https://x.org/", html.as_bytes());
+        assert!(!e.markdown.contains("config"), "{}", e.markdown);
+    }
+
+    #[test]
+    fn json_responses_are_rendered_as_records() {
+        let body = br#"{"jobs": [{"title": "SDE I", "city": "Bengaluru"}]}"#;
+        let e = extract("https://www.amazon.jobs/en/search.json", body);
+        assert_eq!(e.markdown, "## SDE I\ncity: Bengaluru · title: SDE I");
     }
 }
