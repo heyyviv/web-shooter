@@ -2,6 +2,8 @@
 
 A fast, low-token web reader and focused crawler for AI assistants, served over [MCP](https://modelcontextprotocol.io). Instead of handing the assistant whole pages, it returns only the passages or pages that match what the assistant asked for.
 
+How it works: [docs/how-it-works.md](docs/how-it-works.md).
+
 On our test set it answers in a median of **405 ms** with about **1,100 tokens**, where Firecrawl and Jina Reader return about 16,000 tokens per page (details under [Benchmark](#benchmark)).
 
 - **No LLM inside.** The assistant decides what to read; web-shooter fetches, cleans, ranks and trims. Ranking runs locally on the CPU in milliseconds.
@@ -136,4 +138,4 @@ cargo run --release --example probe -- <url> rank "<query>"   # top passages wit
 FIRECRAWL_API_KEY=… cargo run --release --example bench       # benchmark (uses Firecrawl credits)
 ```
 
-`CLAUDE.md` describes the architecture, the design decisions and the reasons behind them.
+[`docs/how-it-works.md`](docs/how-it-works.md) explains the pipeline, crawling, ranking and data handling in more depth. `CLAUDE.md` records the design decisions and the reasons behind them.
