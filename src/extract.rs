@@ -94,16 +94,23 @@ pub fn extract(url: &str, body: &[u8]) -> Extracted {
     }
 
     if visible_chars(&markdown) < EMPTY_SHELL_CHARS {
-        let mut page_data = String::new();
+        let mut blobs: Vec<String> = Vec::new();
+        let mut size = 0;
         for script in embedded.scripts.iter().filter(|s| s.may_hold_data()) {
             for value in data::embedded_json(&script.text) {
-                page_data.push_str(&data::render(&value));
-                page_data.push_str("\n\n");
+                let rendered = data::render(&value);
+                size += rendered.len();
+                blobs.push(rendered);
             }
-            if page_data.len() > MAX_SHELL_DATA_CHARS {
+            if size > MAX_SHELL_DATA_CHARS {
                 break;
             }
         }
+        // Content first: pages embed config (fonts, flags, translations)
+        // alongside the real data, often earlier in the page. Without a
+        // query, the start of the page is what gets returned.
+        blobs.sort_by_key(|b| std::cmp::Reverse(prose_chars(b)));
+        let page_data = blobs.join("\n\n");
         if !page_data.trim().is_empty() {
             markdown = format!("{markdown}\n\n{}", page_data.trim());
         }
@@ -464,6 +471,15 @@ fn decode_entity(name: &str) -> Option<String> {
     Some(c.to_string())
 }
 
+/// Letters and digits in sentence-like lines (six or more words): long
+/// text, as opposed to config values and labels.
+fn prose_chars(text: &str) -> usize {
+    text.lines()
+        .filter(|l| l.split_whitespace().count() >= 6)
+        .map(|l| l.chars().filter(|c| c.is_alphanumeric()).count())
+        .sum()
+}
+
 fn visible_chars(markdown: &str) -> usize {
     markdown.chars().filter(|c| c.is_alphanumeric()).count()
 }
@@ -587,6 +603,18 @@ mod tests {
             e.markdown
         );
         assert!(!e.markdown.contains("template"), "{}", e.markdown);
+    }
+
+    #[test]
+    fn shell_data_puts_prose_before_config() {
+        let html = br#"<html><head><title>Job</title></head><body><div id="app"></div>
+            <script>var fonts = [{"name": "Montserrat", "family": "Montserrat, sans-serif"}];</script>
+            <script>var job = {"title": "Applied AI Engineer", "description": "You will design and build production LLM systems with the team."};</script>
+            </body></html>"#;
+        let md = extract("https://x.zohorecruit.com/jobs/1", html).markdown;
+        let job = md.find("Applied AI Engineer").expect("job rendered");
+        let fonts = md.find("Montserrat").expect("fonts rendered");
+        assert!(job < fonts, "{md}");
     }
 
     #[test]

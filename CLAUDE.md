@@ -101,7 +101,7 @@ Extraction:
 - In `spider_transformations`, keep `clean_html` off because it empties Wikipedia and Next.js pages. Keep `readability` off because it drops headings. Noise is removed in `extract::tidy` instead.
 - MathML (`<math>`) is removed in the `lol_html` pass, because the converter otherwise emits formulas one character per line.
 - Icon-font glyph names ("place", "arrow_back") are replaced with a space: aria-hidden `<i>`/`<span>` and Material icon classes. Aria-hidden `<script>` is left alone because it can hold page data.
-- Pages whose markdown has under 200 visible characters are treated as JavaScript shells, and every inline script that can hold data (no `src`, JS or JSON type) goes through `data::embedded_json`. JSON keys containing `/` are skipped, because they are asset manifests (Zoho's ran to 1.6 MB of markdown). JSON stored inside JSON strings is parsed and rendered.
+- Pages whose markdown has under 200 visible characters are treated as JavaScript shells, and every inline script that can hold data (no `src`, JS or JSON type) goes through `data::embedded_json`. The rendered blobs are sorted by prose (letters in lines of 6+ words) so content comes before config: on Zoho a font list came first, so `fetch` without a query showed only fonts. JSON keys containing `/` are skipped, because they are asset manifests (Zoho's ran to 1.6 MB of markdown). JSON stored inside JSON strings is parsed and rendered.
 - Text from separate text nodes is joined with a space (`extract::push_text`) so `<span>Title</span><span>London</span>` doesn't become "TitleLondon".
 - Markdown links can contain parentheses in the URL (`…/Search_engine_(computing)`). `chunk::MD_LINK` allows one level and is used by chunking, ranking and crawl. The simpler `[^)]*` patterns in `extract::tidy` and `rank::LINK_URL` cut such URLs short, which is harmless there.
 
@@ -116,9 +116,11 @@ Fetching and crawling:
 - **Works:** single postings in plain HTML (Amazon, Google), Zoho Recruit pages (embedded `JSON.parse` data), and JSON APIs such as Amazon's `search.json`.
 - **Still fails without a browser:**
   - Sites whose content is fetched by JavaScript from a separate API: Oracle HCM (Stanford), Atlassian, Amazon's search page.
-  - Bot checks: Uber via Cloudflare.
+  - Bot checks: Uber via Cloudflare. Uber's real job system is also Oracle HCM.
   For these, the client can pass the site's JSON API URL to `fetch` when it knows it; otherwise they need the Chrome fallback.
 - **Ranking gap:** a vague query ("job location") misses a fact that has no label on the page ("Google Bengaluru, Karnataka, India"). Passing the expected value as a keyword works.
+- **Large JSON APIs:** Amazon's `search.json` with 163 jobs is ~68k tokens without a query, so the client LLM preferred curl + jq when it wanted everything. With a query, `fetch` returns only the matching jobs.
+- Test without a query too: the Zoho bug only showed up in no-query mode, because the eval only runs queries.
 
 ## Plan
 
