@@ -2,47 +2,72 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Goal
+
+**web-shooter**: a general, intent-driven web crawler exposed as an MCP server. The client LLM states what it wants and which URLs to look at, and web-shooter returns only the relevant content. It is not tied to any one domain.
+
+Requirements stated by the user:
+- Fast (at least as fast as Firecrawl's cloud API), low token consumption, and very precise.
+- Compared against current tools (Firecrawl, Crawl4AI, Jina Reader, Exa/Tavily, spider-rs, browser agents) and benchmarked against Firecrawl.
+
 ## Status
 
-Milestones M0–M4 and M6 are done. Three tools:
-- `fetch` downloads many URLs concurrently and converts them to markdown. Without a query it fits whole pages to the token budget. With `query`/`keywords` it returns passages ranked by BM25 fused with static embeddings, and with `precise: true` it also reranks them with a cross-encoder.
-- `links` lists a page's links, ranked by a query if given.
-- `crawl` does a best-first crawl from a start page and returns the most relevant pages as URLs with one-line snippets.
+Three MCP tools work and are in real use. The server is registered at user scope (`claude mcp add --scope user web-shooter`) and the user has used it for a job search:
+- `fetch(urls[], query?, keywords?, max_tokens?, precise?)` downloads pages concurrently and converts them to markdown. Without a query it fits whole pages to the token budget (default 2,000). With `query`/`keywords` it returns ranked passages. `precise: true` adds a cross-encoder reranker. It also reads JSON API responses and the data embedded in JavaScript-shell pages.
+- `links(url, query?, keywords?, max_links?)` lists a page's links, ranked by the query if given.
+- `crawl(url, query, keywords?, max_pages?, max_depth?, other_sites?, max_results?)` does a best-first crawl from a start page and returns the most relevant pages as URLs with one-line snippets.
 
-M7 is in progress. The single-page benchmark is done; see "Benchmark results" below. After the user's first real use (job search), `fetch` also reads JSON API responses and the data embedded in JavaScript-shell pages, and the eval has 4 real-use cases (19 total, 17 pass). Milestones are listed under "Plan" below.
+Quality: the eval has 19 cases, 4 of them from real use; 17 pass (`cargo run --release --example eval`). The two failures are a hard paraphrase and a location query on a Google Careers posting. Benchmark results are below.
 
 ## Commands
 
-- Build: `cargo build` (release: `cargo build --release`)
+- Build: `cargo build` (release: `cargo build --release`). The registered MCP server runs `target/release/web-shooter`, so rebuild in release mode; open Claude Code sessions pick it up after `/mcp` reconnect or a restart.
 - Test: `cargo test`
-- Debug extraction on one page: `cargo run --example probe -- <url> [variant]`. It prints the size of each converter setting and the extraction time to stderr; pass `final` (or `plain`, `main`, `readability`, …) to print that markdown, or `rank "<query>"` to print the top 8 chunks with their scores.
-- Ranking test set: `cargo run --release --example eval` (`-v` prints output for failed cases, `--refresh` refetches page snapshots, `--precise` adds the reranker, `--sweep` compares reranker settings, `--bm25` ranks without embeddings). Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
+- Ranking test set: `cargo run --release --example eval`. Flags: `-v` prints the output of failed cases and the top passage of misranked ones, `--refresh` refetches page snapshots, `--precise` adds the reranker, `--sweep` compares reranker settings, `--bm25` ranks without embeddings. Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
+- Debug one page: `cargo run --release --example probe -- <url> [variant]`. It prints each converter setting's output size and the extraction time to stderr. Pass `final` (or `plain`, `main`, `readability`, …) to print that markdown, or `rank "<query>"` to print the top 8 chunks with their scores.
 - Benchmark against Firecrawl and Jina Reader (live network, ~14 Firecrawl credits per run): `FIRECRAWL_API_KEY=… cargo run --release --example bench`. Never write the key into the repo.
-- Run as MCP server: `./target/debug/web-shooter` (speaks JSON-RPC on stdin/stdout, so log only to stderr)
-- Register with Claude Code: `claude mcp add web-shooter -- /absolute/path/to/target/release/web-shooter`
+- Run the server by hand: `./target/release/web-shooter`. It speaks JSON-RPC on stdin/stdout, so log only to stderr.
+- Register with Claude Code: `claude mcp add --scope user web-shooter -- /absolute/path/to/target/release/web-shooter`
+
+## Architecture
+
+- **Rust + tokio, one long-lived binary, MCP over stdio** (`rmcp`).
+- **No LLM inside the server.** The client LLM supplies URLs and queries; there is no built-in web search. Token cost is what the tools return, so results are ranked passages or URL/snippet lists, never whole pages unless asked.
+- **Built on the `spider` crate** for single-page fetching (`Page::new_page`), robots.txt and HTML-to-markdown (`spider_transformations`). spider's own crawl loop is breadth-first, so `crawl` drives its own prioritised frontier.
+- **Pipeline for `fetch`:**
+  1. **Fetch** over plain HTTP, up to 16 URLs at once.
+  2. **Extract.** A JSON response is rendered record by record. HTML becomes its main content as markdown, plus JSON-LD facts. If the result is nearly empty (a JavaScript shell), the data embedded in its inline scripts is rendered instead.
+  3. **Chunk** at headings into ~200-token passages, each with its heading path.
+  4. **Rank:** BM25 plus static embeddings (`model2vec`), fused by a normalised weighted sum, then down-weighting for link lists and navigation snippets. `precise: true` reranks the top 6 with a cross-encoder.
+  5. **Pack** the best passages into the token budget, grouped by page, with a short section outline when part of a page was left out.
+- **No data is kept.** Pages exist only in memory during one tool call and nothing is written to disk. Between calls the server holds only the HTTP connection pool and the models. The user asked about this; keep it true unless they agree to the SQLite cache (M5), which would need expiry, a size cap and an off switch.
+- **Output format** (compact markdown, not JSON):
+  - `fetch` with a query: one `[n] url · title` line per page, then `§ Heading > Path · score` before each passage.
+  - `crawl`: `[n] url · title · score`, then an indented one-line snippet.
+  - `links`: `score · anchor text · url`.
+- **Models** download into the Hugging Face cache on first use and are never built into the binary.
 
 ## Layout
 
 The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so examples and tests can reach the modules.
 
-- `src/server.rs`: `WebShooter`, the MCP handler. It holds the shared HTTP client. Every tool is registered in its `#[tool_router]` impl, which delegates to `src/tools/`.
-- `src/tools/<name>.rs`: each tool's parameter struct (doc comments become the JSON schema the LLM sees, so keep them short) and its `run` function.
-- `src/fetcher.rs`: the HTTP client (via `spider::reqwest`) and single-page fetch through `spider::page::Page::new_page`.
-- `src/data.rs`: JSON → markdown. Arrays of objects become one `##` section per record (title from a `title`/`name`-like key), short fields on one line, long or HTML fields as text. Also finds JSON in inline scripts (`JSON.parse('…')` strings, `= {…}` literals, JSON script bodies).
-- `src/extract.rs`: HTML → markdown. A JSON response is rendered with `data::render` instead. It reads the title, canonical URL, JSON-LD, `__NEXT_DATA__` and links in one `lol_html` pass, converts with `spider_transformations`, then cleans up the result in `tidy`.
-- `src/links.rs`: `Link` (URL, anchor text, heading above it), URL normalisation and filtering, same-site checks.
-- `src/tools/links.rs`, `src/tools/crawl.rs`: the `links` and `crawl` tools. `crawl` keeps a `BinaryHeap` frontier; a link's priority is 0.7 × its own text score + 0.3 × the relevance of the page it was found on, both from `rank::absolute`.
-- `src/chunk.rs`: splits markdown into ~200-token chunks at headings, each with its heading path. Skips back-matter sections (References, Notes, External links…).
-- `src/rank.rs`: tokenizer (stopwords, Snowball stemming, hyphen joining), BM25 over all chunks in the call, and `hybrid`, which fuses BM25 with embedding similarity. `absolute` gives scores on a fixed 0..1 scale (query-term share averaged with cosine), for comparing links and pages across a crawl; `hybrid` is normalised per call, so it can't be used for that. `RankConfig::default()` holds the tuned fusion and cut-off.
-- `src/embed.rs`: `Embedder` loads the `model2vec` static embedding model once in the background (started in `main`). The first query waits for it. If it can't load, ranking falls back to BM25.
-- `src/rerank.rs`: `Reranker` wraps the `fastembed` cross-encoder (Jina v2 base). It is not preloaded; it loads on the first `precise` call.
-- `src/models.rs`: `ModelSet`, the models a server owns. `ready(precise)` hands ranking the reranker only for `precise` calls.
-- `src/pack.rs`: `pack` fits whole pages into the budget, and `pack_passages` packs ranked passages grouped by page (tokens are estimated as bytes / 4).
+- `src/server.rs`: `WebShooter`, the MCP handler. It holds the shared HTTP client and the `ModelSet`. Every tool is registered in its `#[tool_router]` impl, which delegates to `src/tools/`; the tool descriptions and server instructions there are what the client LLM reads.
+- `src/tools/<name>.rs`: each tool's parameter struct (doc comments become the JSON schema the LLM sees, so keep them short) and its `run` function. `tools::query_text` joins query and keywords the same way for all tools.
+- `src/tools/crawl.rs`: `BinaryHeap` frontier. A link's priority is 0.7 × its own text score + 0.3 × the relevance of the page it was found on, both from `rank::absolute`.
+- `src/fetcher.rs`: the HTTP client (`spider::reqwest`) and single-page fetch with one retry on 5xx.
+- `src/extract.rs`: response → markdown. One `lol_html` pass collects the title, canonical URL, links (with anchor text and heading), and inline scripts; it also drops MathML and icon glyphs. Then `spider_transformations` converts the main content and `tidy` removes noise.
+- `src/data.rs`: JSON → markdown. Arrays of objects become one `##` section per record (title from a `title`/`name`-like key), short fields on one line, long or HTML fields as text. `embedded_json` finds JSON in inline scripts: `JSON.parse('…')` strings, `= {…}` literals, and JSON script bodies.
+- `src/links.rs`: `Link`, URL normalisation and filtering, same-site checks.
+- `src/chunk.rs`: chunking, back-matter skipping (References, Notes, External links…), the section outline, `MD_LINK` and `prose_share`.
+- `src/rank.rs`: tokenizer (stopwords, Snowball stemming, hyphen joining), BM25, `hybrid` (BM25 + embeddings, normalised per call), `rank` (hybrid, shape factors, optional rerank) and `absolute` (fixed 0..1 scale, for comparing links and pages across a crawl). `RankConfig::default()` holds the tuned settings and the reasons for them.
+- `src/embed.rs`, `src/rerank.rs`, `src/models.rs`: the embedding model (preloaded at startup; the first query waits for it), the reranker (loaded on the first `precise` call), and `ModelSet`, which hands ranking the reranker only for `precise` calls. If a model can't load, ranking continues without it.
+- `src/pack.rs`: `PageOut`, `pack` (whole pages, fair share of the budget) and `pack_passages`. Tokens are estimated as bytes / 4.
 - `eval/cases.json`: test cases (pages, query, text the answer must contain). Page snapshots are cached in `eval/snapshots/` (git-ignored).
+- `examples/`: `eval`, `probe`, `bench` (see Commands).
 
 ## Benchmark results
 
-First run (2026-10-11) on the 15 eval cases, single run, live network. Firecrawl `/v2/scrape` and Jina return whole pages, so their "answer present" is near-certain; web-shooter returns only ranked passages.
+First run (2026-10-11) on the original 15 eval cases, single run, live network. Firecrawl `/v2/scrape` and Jina return whole pages, so their "answer present" is near-certain; web-shooter returns only ranked passages.
 
 | Tool | Median latency | Avg tokens | Answer present |
 |---|---|---|---|
@@ -51,83 +76,68 @@ First run (2026-10-11) on the 15 eval cases, single run, live network. Firecrawl
 | Firecrawl fresh (`maxAge: 0`) | 3,341 ms | 16,523 | 15/15 |
 | Jina Reader | 625 ms | 15,692 | 15/15 |
 
-Caveats: these are the same cases the ranking was tuned on; there was one run, so slow origins skew it (paulgraham.com took 0.9–6 s); none of the pages need JavaScript or have anti-bot protection, which is where Firecrawl and Jina have an advantage; crawl hasn't been compared yet. The Firecrawl free plan allows about 10 requests a minute, so `bench` spaces its requests 6.5 s apart.
+Caveats:
+- These are the same cases the ranking was tuned on.
+- There was one run, so slow origins skew it (paulgraham.com took 0.9–6 s).
+- None of these pages need JavaScript or have anti-bot protection, which is where Firecrawl and Jina have an advantage.
+- `crawl` hasn't been compared yet.
+- The Firecrawl free plan allows about 10 requests a minute, so `bench` spaces its requests 6.5 s apart.
 
-## Gotchas
+## Decisions and gotchas
 
+Dependencies:
 - Use `rmcp::schemars`, not a separate `schemars` dependency, so the versions match.
 - `spider` is used with `default-features = false`. Its default and `basic` features pull in io_uring, sqlx and more.
-- MathML (`<math>`) is removed during the `lol_html` pass in `extract::scan`, because the converter otherwise emits formulas one character per line.
-- In `spider_transformations`, keep `clean_html` off because it empties Wikipedia and Next.js pages. Keep `readability` off because it drops headings. Noise is removed in `extract::tidy` instead.
-- The embedding model (`minishlab/potion-retrieval-32M`, override with `WEB_SHOOTER_EMBED_MODEL`) is downloaded into the Hugging Face cache (`~/.cache/huggingface`) on first use. That took ~33 s once; after that it loads in ~50 ms.
 - `model2vec-rs` is built with `default-features = false, features = ["hf-hub", "fancy-regex"]` to avoid the oniguruma C library.
 - `fastembed` is built with `default-features = false` and rustls features. Its default cache is `./.fastembed_cache` relative to the working directory, so `rerank.rs` points it at the Hugging Face cache.
-- The reranker is opt-in (`precise: true`), not on by default as first planned. On the eval it didn't beat embeddings at ranking (top 13/15 vs 14/15) and adds ~300 ms, though it cuts tokens by ~33%. Jina v1 turbo was faster but worse (top 8/15); BGE base was slower and worse. Its model is ~1.1 GB.
-- Fusion is a min-max-normalised weighted sum, not RRF as first planned. RRF ranked as well in the eval, but its flat scores defeat the relative cut-off, so replies filled the budget.
-- Pages whose markdown has under 200 visible characters are treated as JavaScript shells: every inline script that can hold data (no `src`, JS or JSON type) is searched with `data::embedded_json` and rendered. Keys containing `/` are skipped, because they are asset manifests (Zoho's ran to 1.6 MB of markdown).
-- Some sites have no page data in the HTML at all (Oracle HCM such as Stanford's careers site, Atlassian) or use bot checks (Uber via Cloudflare). Those need the v2 Chrome fallback, or the site's JSON API URL passed to `fetch`.
-- Icon-font glyph names ("place", "arrow_back") are replaced with a space in the `lol_html` pass: aria-hidden `<i>`/`<span>` and Material icon classes. Aria-hidden `<script>` is left alone because it can hold page data.
-- `rank::rank` multiplies scores by `shape_factor` in both modes: link lists (3+ links and under 100 letters/digits outside them) × 0.5, very short passages (≤ 6 words, usually navigation) × 0.5.
-- The HTTP client sends browser `Accept`/`Accept-Language` headers (uber.com returned 406 without them) and retries a 5xx once after 500 ms.
-- `fetch` and `links` do not check robots.txt: they read pages the client asked for by URL, like a browser. `crawl` checks robots.txt for every page it discovers (not the start page), using `spider::packages::robotparser::parser::RobotFileParser` with `fetcher::USER_AGENT`.
-- `crawl` limits: 4 concurrent fetches, 30 s, `max_pages` (default 30, max 200), `max_depth` (default 3), same site unless `other_sites`. It stops early after 12 pages in a row that don't enter the top results.
-- `crawl` leaves "thin" pages (less than 15% of their letters and digits outside links: indexes, link lists, Wikipedia's "What links here") out of the results but still follows their links. Duplicates are dropped by canonical URL, then by content hash.
-- Markdown links can contain parentheses in the URL (`…/Search_engine_(computing)`); `crawl.rs`'s `MD_LINK` allows one level. The simpler `[^)]*` pattern elsewhere cuts such URLs short.
+
+Ranking:
+- Fusion is a min-max-normalised weighted sum (BM25 weight 0.3, cut-off 0.7 of the top score), not RRF as first planned. RRF ranked as well in the eval, but its flat scores defeat the relative cut-off, so replies filled the budget.
+- The reranker is opt-in (`precise: true`), not on by default as first planned. On the eval it didn't beat embeddings at ranking (top 13/15 vs 14/15) and adds ~300 ms, though it cuts tokens by ~33%. Jina v1 turbo was faster but worse (top 8/15); BGE base was slower and worse. Its model (Jina v2 base) is ~1.1 GB.
+- `rank::rank` multiplies scores by `shape_factor` in both modes: link lists (3+ links and under 100 letters/digits outside them) × 0.5, very short passages (≤ 6 words, usually navigation) × 0.5. A plain link-density penalty hurt the React case, whose answer sentence shares a chunk with video links.
+- The embedding model is `minishlab/potion-retrieval-32M` (override with `WEB_SHOOTER_EMBED_MODEL`). The first download took ~33 s; after that it loads in ~50 ms.
+
+Extraction:
+- In `spider_transformations`, keep `clean_html` off because it empties Wikipedia and Next.js pages. Keep `readability` off because it drops headings. Noise is removed in `extract::tidy` instead.
+- MathML (`<math>`) is removed in the `lol_html` pass, because the converter otherwise emits formulas one character per line.
+- Icon-font glyph names ("place", "arrow_back") are replaced with a space: aria-hidden `<i>`/`<span>` and Material icon classes. Aria-hidden `<script>` is left alone because it can hold page data.
+- Pages whose markdown has under 200 visible characters are treated as JavaScript shells, and every inline script that can hold data (no `src`, JS or JSON type) goes through `data::embedded_json`. JSON keys containing `/` are skipped, because they are asset manifests (Zoho's ran to 1.6 MB of markdown). JSON stored inside JSON strings is parsed and rendered.
 - Text from separate text nodes is joined with a space (`extract::push_text`) so `<span>Title</span><span>London</span>` doesn't become "TitleLondon".
+- Markdown links can contain parentheses in the URL (`…/Search_engine_(computing)`). `chunk::MD_LINK` allows one level and is used by chunking, ranking and crawl. The simpler `[^)]*` patterns in `extract::tidy` and `rank::LINK_URL` cut such URLs short, which is harmless there.
 
-## Goal
+Fetching and crawling:
+- The HTTP client sends browser `Accept`/`Accept-Language` headers (uber.com returned 406 without them) and an honest user agent, `web-shooter/<version>`. It retries a 5xx once after 500 ms.
+- `fetch` and `links` do not check robots.txt: they read pages the client asked for by URL, like a browser. `crawl` checks robots.txt for every page it discovers (not the start page), using `spider::packages::robotparser::parser::RobotFileParser` with `fetcher::USER_AGENT`.
+- `crawl` limits: 4 concurrent fetches (its politeness control; there is no fixed delay), 30 s, `max_pages` (default 30, max 200), `max_depth` (default 3), same site unless `other_sites`. It stops early after 12 pages in a row that don't enter the top results.
+- `crawl` leaves "thin" pages (under 15% of their letters and digits outside links: indexes, link lists, Wikipedia's "What links here") out of the results but still follows their links. Duplicates are dropped by canonical URL, then by content hash.
 
-**web-shooter**: a general, intent-driven web crawler exposed as an MCP server. The client LLM states what it wants and which URLs to look at, and web-shooter returns only the relevant content. It is not tied to any one domain.
+## What real use showed (job search, 2026-10-11)
 
-## Requirements (stated by the user)
-
-- Fast (target: at least as fast as Firecrawl's cloud API), low token consumption, and very precise.
-- Compare against current tools (Firecrawl, Crawl4AI, Jina Reader, Exa/Tavily, spider-rs, browser agents) and benchmark against Firecrawl.
-
-## Decided architecture
-
-- **Language and runtime:** Rust, tokio. One long-lived binary.
-- **Interface:** MCP server over **stdio**.
-- **Engine:** built on the `spider` crate (spider-rs) for fetching, link extraction, robots.txt, throttling, and HTML-to-markdown. spider's own crawl loop is breadth-first with no relevance ordering, so web-shooter drives its own prioritised frontier.
-- **No LLM inside the server.** The client LLM supplies starting URLs and queries; there is no built-in web search tool. Token cost is what the tools return, so results are ranked passages or URL/title/snippet lists, never whole pages unless asked.
-- **Tools (v1 draft):**
-  - `fetch(urls[], query?, keywords?, max_tokens?, precise?)`: relevant passages from one or many pages.
-  - `crawl(url, query, keywords?, max_pages?, max_depth?, other_sites?, max_results?)`: focused crawl that returns a ranked URL list with snippets.
-  - `links(url, query?, keywords?, max_links?)`: a page's links, ranked.
-- **Pipeline:**
-  1. **Fetch:** plain HTTP first.
-  2. **Extract:** read embedded JSON first (`__NEXT_DATA__`, JSON-LD). Otherwise extract the main content and convert it to markdown. If the result is empty, fall back to headless Chrome.
-  3. **Chunk:** split by headings and prefix each chunk with its heading path.
-  4. **Rank:** BM25 plus static embeddings (`model2vec`), fused by a normalised weighted sum. Optionally a cross-encoder reranker, **opt-in per call** with `precise: true` (decided after the M4 eval).
-  5. **Pack:** fill the token budget and return each passage with its URL, heading path and the page outline.
-- **Crawl frontier:** a priority queue. Links are scored by the ranker's cheap stage (BM25 plus embeddings) on anchor text, URL and nearby text. The crawl stops early once it has enough good results.
-- **Cache:** SQLite. It stores fetched pages and chunks with an expiry time and uses ETag / conditional requests.
-
-- **Scope of v1:** plain HTTP plus embedded JSON only. Headless Chrome fallback comes in v2.
-- **Models:** the embedding model and the reranker are downloaded automatically on first run into a cache folder, not built into the binary.
-- **Tool output:** compact markdown text, not JSON. Each passage has a one-line header: `[n] url · Heading > Path · score`.
-- **Defaults:** about 2,000 tokens per `fetch` call (adjustable per call). robots.txt is respected, with user agent `web-shooter/<version>` and a per-site delay.
-- **Evaluation:** a test set of about 20 queries with known-good passages to measure precision, and a benchmark of about 50 URLs comparing speed and tokens against Firecrawl (needs the user's API key).
+- **Works:** single postings in plain HTML (Amazon, Google), Zoho Recruit pages (embedded `JSON.parse` data), and JSON APIs such as Amazon's `search.json`.
+- **Still fails without a browser:**
+  - Sites whose content is fetched by JavaScript from a separate API: Oracle HCM (Stanford), Atlassian, Amazon's search page.
+  - Bot checks: Uber via Cloudflare.
+  For these, the client can pass the site's JSON API URL to `fetch` when it knows it; otherwise they need the Chrome fallback.
+- **Ranking gap:** a vague query ("job location") misses a fact that has no label on the page ("Google Bengaluru, Karnataka, India"). Passing the expected value as a keyword works.
 
 ## Plan
 
-| # | Milestone |
-|---|---|
-| M0 | Skeleton: stdio MCP server with a stub `fetch` (done) |
-| M1 | Fetch many URLs at once and convert to markdown, read embedded JSON, cut to the token budget (done) |
-| M2 | Chunking, BM25 and packing: `fetch` with `query` returns only matching passages (done) |
-| M3 | Static embeddings (`model2vec-rs`) fused with BM25, models downloaded on first run (done; weighted fusion instead of RRF) |
-| M4 | Cross-encoder reranker (`fastembed`) (done; opt-in via `precise`, not on by default) |
-| M6 | `links` and `crawl` tools with the scored frontier and early stop (done) |
-| M7 | Benchmark against Firecrawl and Jina, held-out test cases, then tuning (next) |
-| M8 | PDF support (research papers) |
-| M5 | SQLite cache (`rusqlite`) with ETag (moved after M8: it only speeds up repeat fetches) |
-| v2 | Headless Chrome fallback |
+| # | Milestone | Status |
+|---|---|---|
+| M0 | Skeleton: stdio MCP server | done |
+| M1 | Fetch many URLs, convert to markdown, fit the token budget | done |
+| M2 | Chunking, BM25 and passage packing | done |
+| M3 | Static embeddings fused with BM25 | done (weighted fusion instead of RRF) |
+| M4 | Cross-encoder reranker | done (opt-in via `precise`) |
+| M6 | `links` and `crawl` with the scored frontier and early stop | done |
+| M7 | Benchmark against Firecrawl and Jina, real-use fixes, held-out cases | in progress: single-page benchmark and real-use fixes done; held-out cases and the crawl comparison remain (the crawl comparison costs Firecrawl credits, so ask first) |
+| v2 | Headless Chrome fallback, only when plain HTTP returns an empty shell | proposed next, ahead of M8, because 4 of the user's failing sites need it; not yet agreed |
+| M8 | PDF support (research papers) | planned |
+| M5 | SQLite cache with ETag | planned last; needs expiry, size cap and an off switch (see "No data is kept") |
 
-The order changed after M4. The user is now trying the server in real tasks (registered at user scope with `claude mcp add --scope user web-shooter`). Turn their real queries into eval cases.
-
-Build the test set gradually from M2 onwards so each ranking change is measured.
+Keep adding the user's real queries to `eval/cases.json`, and keep some cases out of tuning so there is an honest held-out number.
 
 ## Working agreement
 
-- Agree on scope and design with the user before writing code. An early implementation was started without that and was discarded at the user's request.
+- Agree on scope and design with the user before writing code. An early implementation was started without that and was discarded at the user's request. Small bug fixes found in real use are fine to make directly; new features and changes of plan need agreement.
+- Report results honestly, including failures and what the numbers don't show (cases tuned on, single runs, missing comparisons).
