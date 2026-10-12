@@ -1,0 +1,83 @@
+[
+  {
+    "name": "ho-rust-ownership",
+    "urls": [
+      "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html"
+    ],
+    "query": "what are the rules of ownership in rust",
+    "expect": [
+      "Each value in Rust has an"
+    ]
+  },
+  {
+    "name": "ho-retry-after",
+    "urls": [
+      "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/429",
+      "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/503"
+    ],
+    "query": "how does the server tell a rate-limited client when to try again",
+    "expect": [
+      "Retry-After"
+    ]
+  },
+  {
+    "name": "ho-pep8-line-length",
+    "urls": [
+      "https://peps.python.org/pep-0008/"
+    ],
+    "query": "how long can a line of python code be",
+    "expect": [
+      "79 characters"
+    ]
+  },
+  {
+    "name": "ho-robots-standard",
+    "urls": [
+      "https://en.wikipedia.org/wiki/Robots.txt"
+    ],
+    "query": "when did robots.txt become an official internet standard",
+    "expect": [
+      "RFC 9309"
+    ]
+  },
+  {
+    "name": "ho-go-interface-names",
+    "urls": [
+      "https://go.dev/doc/effective_go"
+    ],
+    "query": "naming convention for single-method interfaces",
+    "expect": [
+      "er suffix"
+    ]
+  },
+  {
+    "name": "ho-sqlite-concurrency",
+    "urls": [
+      "https://www.sqlite.org/whentouse.html"
+    ],
+    "query": "can many clients write to sqlite at the same time",
+    "expect": [
+      "one writer"
+    ]
+  },
+  {
+    "name": "ho-pg-first-users",
+    "urls": [
+      "https://www.paulgraham.com/ds.html"
+    ],
+    "query": "how should a startup get its first users",
+    "expect": [
+      "recruit users manually"
+    ]
+  },
+  {
+    "name": "ho-docker-small-images",
+    "urls": [
+      "https://docs.docker.com/build/building/best-practices/"
+    ],
+    "query": "how to reduce the size of the final docker image",
+    "expect": [
+      "multi-stage"
+    ]
+  }
+]

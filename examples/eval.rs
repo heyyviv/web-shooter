@@ -10,6 +10,7 @@
 //! - `--precise`: also rerank with the cross-encoder, as `precise: true` does
 //! - `--sweep`: compare reranker settings, one summary line each
 //! - `--bm25`: rank without the embedding model
+//! - `--heldout`: run `eval/heldout.json`, cases kept out of tuning
 //!
 //! Reported per case:
 //! - found: every expected string appears somewhere in the output
@@ -54,7 +55,8 @@ async fn main() -> anyhow::Result<()> {
     let has = |flag: &str| args.iter().any(|a| a == flag);
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("eval");
-    let cases: Vec<Case> = serde_json::from_str(&fs::read_to_string(root.join("cases.json"))?)?;
+    let file = if has("--heldout") { "heldout.json" } else { "cases.json" };
+    let cases: Vec<Case> = serde_json::from_str(&fs::read_to_string(root.join(file))?)?;
     let pages = load_pages(&cases, &root.join("snapshots"), has("--refresh")).await?;
     let embedder = if has("--bm25") { None } else { embed::load() };
     let reranker = if has("--precise") || has("--sweep") {

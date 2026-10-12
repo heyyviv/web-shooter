@@ -3,6 +3,14 @@ name = "web-shooter"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
+description = "Fast, low-token web reader and focused crawler for AI assistants, served over MCP"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/heyyviv/web-shooter"
+homepage = "https://github.com/heyyviv/web-shooter"
+readme = "README.md"
+keywords = ["mcp", "crawler", "scraper", "llm", "search"]
+categories = ["command-line-utilities", "web-programming", "text-processing"]
+exclude = ["/eval/snapshots", "/CLAUDE.md", "/.github"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -18,3 +26,8 @@ serde_json = "1.0.151"
 spider = { version = "2.53.9", default-features = false, features = ["encoding", "reqwest_rustls_tls", "sync"] }
 spider_transformations = "2.39.13"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "io-std"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

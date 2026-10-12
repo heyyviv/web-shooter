@@ -23,7 +23,7 @@ Quality: the eval has 19 cases, 4 of them from real use; 17 pass (`cargo run --r
 
 - Build: `cargo build` (release: `cargo build --release`). The registered MCP server runs `target/release/web-shooter`, so rebuild in release mode; open Claude Code sessions pick it up after `/mcp` reconnect or a restart.
 - Test: `cargo test`
-- Ranking test set: `cargo run --release --example eval`. Flags: `-v` prints the output of failed cases and the top passage of misranked ones, `--refresh` refetches page snapshots, `--precise` adds the reranker, `--sweep` compares reranker settings, `--bm25` ranks without embeddings. Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
+- Ranking test set: `cargo run --release --example eval`. Flags: `-v` prints the output of failed cases and the top passage of misranked ones, `--refresh` refetches page snapshots, `--precise` adds the reranker, `--sweep` compares reranker settings, `--bm25` ranks without embeddings, `--heldout` runs `eval/heldout.json` (8 cases kept out of tuning; currently 8/8 found, 6/8 top). `bench` also takes `--heldout`. Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
 - Debug one page: `cargo run --release --example probe -- <url> [variant]`. It prints each converter setting's output size and the extraction time to stderr. Pass `final` (or `plain`, `main`, `readability`, …) to print that markdown, or `rank "<query>"` to print the top 8 chunks with their scores.
 - Benchmark against Firecrawl and Jina Reader (live network, ~14 Firecrawl credits per run): `FIRECRAWL_API_KEY=… cargo run --release --example bench`. Never write the key into the repo.
 - Run the server by hand: `./target/release/web-shooter`. It speaks JSON-RPC on stdin/stdout, so log only to stderr.
@@ -122,6 +122,10 @@ Fetching and crawling:
 - **Large JSON APIs:** Amazon's `search.json` with 163 jobs is ~68k tokens without a query, so the client LLM preferred curl + jq when it wanted everything. With a query, `fetch` returns only the matching jobs.
 - Test without a query too: the Zoho bug only showed up in no-query mode, because the eval only runs queries.
 
+## Release
+
+Dual MIT/Apache-2.0. `dist-workspace.toml` and `.github/workflows/release.yml` come from `cargo-dist`: pushing a `vX.Y.Z` tag builds binaries for Apple Silicon macOS, Linux x86_64/ARM64 and Windows x86_64 and publishes shell/PowerShell installers. There is no Intel Mac build because ONNX Runtime ships no prebuilt library for it. After editing the dist config, run `dist generate`. `cargo publish --dry-run` passes; the crate is not yet on crates.io.
+
 ## Plan
 
 | # | Milestone | Status |
@@ -137,7 +141,7 @@ Fetching and crawling:
 | M8 | PDF support (research papers) | planned |
 | M5 | SQLite cache with ETag | planned last; needs expiry, size cap and an off switch (see "No data is kept") |
 
-Keep adding the user's real queries to `eval/cases.json`, and keep some cases out of tuning so there is an honest held-out number.
+Keep adding the user's real queries to `eval/cases.json`. `eval/heldout.json` holds cases that must never be used for tuning, so there is an honest held-out number; grow it, don't tune on it.
 
 ## Working agreement
 
