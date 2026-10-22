@@ -194,5 +194,75 @@
     "expect": [
       "Minimum qualifications"
     ]
+  },
+  {
+    "name": "para-rust-creator",
+    "urls": [
+      "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+    ],
+    "query": "who designed Rust and when",
+    "expect": [
+      "Graydon Hoare"
+    ]
+  },
+  {
+    "name": "pdf-attention-optimizer",
+    "urls": [
+      "https://arxiv.org/pdf/1706.03762"
+    ],
+    "query": "which optimizer and learning rate schedule were used for training",
+    "expect": [
+      "warmup"
+    ]
+  },
+  {
+    "name": "pdf-bert-masking",
+    "urls": [
+      "https://arxiv.org/pdf/1810.04805"
+    ],
+    "query": "what fraction of input tokens are masked in pre-training",
+    "expect": [
+      "15%"
+    ]
+  },
+  {
+    "name": "pdf-raft-timeout",
+    "urls": [
+      "https://raft.github.io/raft.pdf"
+    ],
+    "query": "how are election timeouts chosen to avoid split votes",
+    "expect": [
+      "randomized"
+    ]
+  },
+  {
+    "name": "pdf-rfc9110-range",
+    "urls": [
+      "https://www.rfc-editor.org/rfc/rfc9110.pdf"
+    ],
+    "query": "status code when the requested range cannot be satisfied",
+    "expect": [
+      "416"
+    ]
+  },
+  {
+    "name": "pdf-irs-late-deposit",
+    "urls": [
+      "https://www.irs.gov/pub/irs-pdf/p15.pdf"
+    ],
+    "query": "penalty for deposits made 1 to 5 days late",
+    "expect": [
+      "2%"
+    ]
+  },
+  {
+    "name": "pdf-nist-csf-functions",
+    "urls": [
+      "https://nvlpubs.nist.gov/nistpubs/CSWP/NIST.CSWP.29.pdf"
+    ],
+    "query": "what are the core functions of the framework",
+    "expect": [
+      "GOVERN"
+    ]
   }
 ]

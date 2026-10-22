@@ -11,6 +11,7 @@ use spider_transformations::transformation::content::{
 use crate::{
     data,
     links::{self, Link},
+    pdf,
 };
 
 /// Below this many characters of visible text, the page is treated as an
@@ -33,6 +34,7 @@ const SKIP_LD_TYPES: &[&str] = &[
     "ListItem",
 ];
 
+#[derive(Default)]
 pub struct Extracted {
     pub title: Option<String>,
     pub markdown: String,
@@ -40,23 +42,36 @@ pub struct Extracted {
     pub links: Vec<Link>,
     /// The page's `<link rel="canonical">`, resolved, if it has one.
     pub canonical: Option<String>,
+    /// Why the response could not be read, when known (e.g. a scanned PDF).
+    pub error: Option<String>,
 }
 
 /// Embedded page data rendered for an empty shell is cut at this size.
 const MAX_SHELL_DATA_CHARS: usize = 1 << 20;
 
-/// Turn a response into compact markdown. JSON (an API response) is
-/// rendered record by record. HTML becomes its main content plus JSON-LD
+/// Turn a response into compact markdown. A PDF is converted page by page;
+/// JSON (an API response) is rendered record by record. HTML becomes its main content plus JSON-LD
 /// facts, plus the data embedded in its scripts when the HTML itself is an
 /// empty JavaScript shell.
 pub fn extract(url: &str, body: &[u8]) -> Extracted {
     let parsed = Url::parse(url).ok();
+    if pdf::is_pdf(body) {
+        return match pdf::to_markdown(body) {
+            Ok(doc) => Extracted {
+                title: doc.title,
+                markdown: doc.markdown,
+                ..Extracted::default()
+            },
+            Err(e) => Extracted {
+                error: Some(e),
+                ..Extracted::default()
+            },
+        };
+    }
     if let Some(value) = json_body(body) {
         return Extracted {
-            title: None,
             markdown: data::render(&value),
-            links: Vec::new(),
-            canonical: None,
+            ..Extracted::default()
         };
     }
     let (embedded, html) = scan(body);
@@ -80,7 +95,10 @@ pub fn extract(url: &str, body: &[u8]) -> Extracted {
         selector_config: None,
         ignore_tags: None,
     };
-    let mut markdown = tidy(&transform_content_input(input, &config));
+    let mut markdown = restore_code(
+        &tidy(&transform_content_input(input, &config)),
+        &embedded.code_blocks,
+    );
 
     let facts: Vec<String> = embedded
         .scripts
@@ -132,6 +150,7 @@ pub fn extract(url: &str, body: &[u8]) -> Extracted {
                 })
                 .collect(),
         ),
+        error: None,
     }
 }
 
@@ -169,6 +188,37 @@ struct Embedded {
     /// `(href, anchor text, heading above)` before resolving.
     links: Vec<(String, String, String)>,
     canonical: Option<String>,
+    /// The raw text of each `<pre>` block, which the HTML now holds as a
+    /// placeholder (see `restore_code`).
+    code_blocks: Vec<String>,
+}
+
+/// Stands in for the `n`th `<pre>` block during conversion. Letters and
+/// digits only, so the converter neither escapes nor splits it.
+fn code_placeholder(n: usize) -> String {
+    format!("wscodeblock{n}x")
+}
+
+static CODE_PLACEHOLDER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"wscodeblock([0-9]+)x").unwrap());
+
+/// Put each `<pre>` block's original text back in place of its placeholder.
+/// The converter strips code indentation and escapes markdown punctuation
+/// (doubling backslashes), so code is taken from the HTML instead.
+fn restore_code(markdown: &str, blocks: &[String]) -> String {
+    if blocks.is_empty() {
+        return markdown.to_string();
+    }
+    CODE_PLACEHOLDER
+        .replace_all(markdown, |c: &regex::Captures| {
+            let Some(code) = c[1].parse::<usize>().ok().and_then(|n| blocks.get(n)) else {
+                return String::new();
+            };
+            let code = decode_entities(code);
+            let lines: Vec<&str> = code.lines().map(str::trim_end).collect();
+            lines.join("\n").trim_matches('\n').to_string()
+        })
+        .into_owned()
 }
 
 /// One streaming pass that pulls the title, embedded JSON and links out of
@@ -201,6 +251,39 @@ fn scan(body: &[u8]) -> (Embedded, Vec<u8>) {
                         Ok(())
                     }
                 ),
+                // Code blocks: keep the raw text (with its indentation) and
+                // leave a placeholder for the converter.
+                element!("pre", {
+                    let found = found.clone();
+                    move |el| {
+                        let mut found = found.borrow_mut();
+                        el.prepend(
+                            &code_placeholder(found.code_blocks.len()),
+                            ContentType::Text,
+                        );
+                        found.code_blocks.push(String::new());
+                        Ok(())
+                    }
+                }),
+                text!("pre", {
+                    let found = found.clone();
+                    move |t| {
+                        if let Some(block) = found.borrow_mut().code_blocks.last_mut() {
+                            block.push_str(t.as_str());
+                        }
+                        t.remove();
+                        Ok(())
+                    }
+                }),
+                element!("pre br", {
+                    let found = found.clone();
+                    move |_| {
+                        if let Some(block) = found.borrow_mut().code_blocks.last_mut() {
+                            block.push('\n');
+                        }
+                        Ok(())
+                    }
+                }),
                 element!("h1, h2, h3, h4, h5, h6", {
                     let heading = heading.clone();
                     move |_| {
@@ -355,14 +438,19 @@ fn flatten_scalars(prefix: &str, v: &Value, out: &mut Vec<String>) {
     }
 }
 
-static EMPTY_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\s*\]\([^)]*\)").unwrap());
+/// A markdown link target, allowing one level of parentheses in the URL
+/// (`…/wiki/Rust_(programming_language)?action=edit`), as in `chunk::MD_LINK`.
+const LINK_TARGET: &str = r"\((?:[^()]|\([^()]*\))*\)";
+
+static EMPTY_LINK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"\[\s*\]{LINK_TARGET}")).unwrap());
 static CITATION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[\[[^\]]*\]\]\([^)]*\)").unwrap());
+    LazyLock::new(|| Regex::new(&format!(r"\[\[[^\]]*\]\]{LINK_TARGET}")).unwrap());
 /// Wiki-style section edit links: `[[edit](…)]` or `[edit](…)`.
 static EDIT_LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[?\[edit\]\([^)]*\)\]?").unwrap());
+    LazyLock::new(|| Regex::new(&format!(r"\[?\[edit\]{LINK_TARGET}\]?")).unwrap());
 static FRAGMENT_LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(#[^)]*\)").unwrap());
+    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(#(?:[^()]|\([^()]*\))*\)").unwrap());
 static ENTITY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z]+);").unwrap());
 static JUNK_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[\s|\[\]()]*$").unwrap());
@@ -498,6 +586,24 @@ mod tests {
         assert_eq!(
             tidy(md),
             "A [web](https://w.org/Web_(x)) crawler.\nJump text & more `x`"
+        );
+    }
+
+    #[test]
+    fn tidy_removes_edit_links_with_parentheses_in_the_url() {
+        let md = "## History\n[[edit](https://w.org/w/index.php?title=Rust_(programming_language)&action=edit&section=1)]\nText.";
+        assert_eq!(tidy(md), "## History\nText.");
+    }
+
+    #[test]
+    fn code_blocks_keep_indentation_and_backslashes() {
+        let html = br#"<html><body><main><p>Example:</p><div class="highlight"><pre><span class="k">async</span> <span class="k">def</span> main():
+    <span class="k">await</span> long_running_task(&quot;a\\b&quot;)<br>    x = 1 &lt; 2
+</pre></div><p>After.</p></main></body></html>"#;
+        let md = extract("https://docs.example/", html).markdown;
+        assert!(
+            md.contains("```\nasync def main():\n    await long_running_task(\"a\\\\b\")\n    x = 1 < 2\n```"),
+            "{md}"
         );
     }
 

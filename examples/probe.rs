@@ -1,5 +1,6 @@
 //! Debug extraction on one URL: `cargo run --example probe -- <url> [variant]`,
 //! or see how chunks rank: `cargo run --example probe -- <url> rank "<query>"`.
+//! The URL may be a local PDF path.
 use spider_transformations::transformation::content::{
     ReturnFormat, TransformConfig, TransformInput, transform_content_input,
 };
@@ -11,7 +12,14 @@ async fn main() -> anyhow::Result<()> {
     let url = args.next().expect("url");
     let variant = args.next().unwrap_or_default();
     let client = fetcher::build_client()?;
-    let f = fetcher::fetch(&client, &url).await;
+    let f = match fetcher::local_path(&url) {
+        Some(path) => fetcher::Fetched {
+            url: url.clone(),
+            status: 200,
+            body: std::fs::read(path)?,
+        },
+        None => fetcher::fetch(&client, &url).await,
+    };
     eprintln!("status {} · {} bytes · {}", f.status, f.body.len(), f.url);
     let cfg = |main_content, readability, clean_html| TransformConfig {
         return_format: ReturnFormat::Markdown,

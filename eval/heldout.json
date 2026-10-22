@@ -79,5 +79,55 @@
     "expect": [
       "multi-stage"
     ]
+  },
+  {
+    "name": "pdf-bitcoin-pow",
+    "urls": [
+      "https://bitcoin.org/bitcoin.pdf"
+    ],
+    "query": "which hash function does proof-of-work use",
+    "expect": [
+      "SHA-256"
+    ]
+  },
+  {
+    "name": "pdf-mapreduce-failure",
+    "urls": [
+      "https://static.googleusercontent.com/media/research.google.com/en//archive/mapreduce-osdi04.pdf"
+    ],
+    "query": "what happens to completed map tasks when a worker fails",
+    "expect": [
+      "re-executed"
+    ]
+  },
+  {
+    "name": "pdf-dynamo-versions",
+    "urls": [
+      "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+    ],
+    "query": "how are conflicting versions of an object detected",
+    "expect": [
+      "vector clock"
+    ]
+  },
+  {
+    "name": "pdf-gfs-chunk-size",
+    "urls": [
+      "https://static.googleusercontent.com/media/research.google.com/en//archive/gfs-sosp2003.pdf"
+    ],
+    "query": "how large is a chunk",
+    "expect": [
+      "64 MB"
+    ]
+  },
+  {
+    "name": "pdf-nist-password-length",
+    "urls": [
+      "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-63b.pdf"
+    ],
+    "query": "minimum length for user-chosen passwords",
+    "expect": [
+      "8 characters"
+    ]
   }
 ]

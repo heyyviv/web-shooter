@@ -6,6 +6,7 @@ pub mod fetcher;
 pub mod links;
 pub mod models;
 pub mod pack;
+pub mod pdf;
 pub mod rank;
 pub mod rerank;
 pub mod server;

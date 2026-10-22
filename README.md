@@ -32,7 +32,7 @@ work through the examples that illustrate them:
 | `links(url, query?, keywords?, max_links?)` | You want to choose which page to read next | The page's links, ranked by the query if given |
 | `crawl(url, query, keywords?, max_pages?, max_depth?, other_sites?, max_results?)` | You have a start page and a goal, not the URLs | The most relevant pages found, as URLs with a one-line snippet each |
 
-`fetch` also reads JSON API responses (one section per record) and the data embedded in JavaScript-rendered pages. `precise: true` adds a slower cross-encoder reranker (about 300 ms more, about a third fewer tokens). `crawl` respects robots.txt, stays on the start site by default, fetches 4 pages at a time and stops after 30 pages or 30 seconds by default.
+`fetch` also reads PDFs, from a URL or a local path (`/path/paper.pdf`, `~/…`, `file://…`): headings are recovered from font sizes and section numbers, two-column papers are read column by column, running headers and footers are dropped, and each passage is labelled with its page (`§ 5.3 Log replication · p.7`). It reads JSON API responses (one section per record) and the data embedded in JavaScript-rendered pages too. `precise: true` adds a slower cross-encoder reranker (about 300 ms more, about a third fewer tokens). `crawl` respects robots.txt, stays on the start site by default, fetches 4 pages at a time and stops after 30 pages or 30 seconds by default.
 
 ## Setup
 
@@ -132,7 +132,9 @@ Tips:
 
 ## What it can't read yet
 
-web-shooter does not run JavaScript. Pages that load their content from a separate API after the page arrives come back empty: Oracle HCM career sites, many search-results pages, and sites behind bot checks such as Cloudflare. If you know the site's JSON API URL, pass that to `fetch`; otherwise use a browser tool. A headless-Chrome fallback is planned. PDFs are not supported yet either.
+web-shooter does not run JavaScript. Pages that load their content from a separate API after the page arrives come back empty: Oracle HCM career sites, many search-results pages, and sites behind bot checks such as Cloudflare. If you know the site's JSON API URL, pass that to `fetch`; otherwise use a browser tool. A headless-Chrome fallback is planned.
+
+Scanned PDFs (images with no text layer) need OCR, which web-shooter doesn't do; `fetch` says so. Complex tables and equations in PDFs come out as plain text in reading order.
 
 ## Benchmark
 

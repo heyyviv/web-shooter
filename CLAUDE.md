@@ -13,18 +13,18 @@ Requirements stated by the user:
 ## Status
 
 Three MCP tools work and are in real use. The server is registered at user scope (`claude mcp add --scope user web-shooter`) and the user has used it for a job search:
-- `fetch(urls[], query?, keywords?, max_tokens?, precise?)` downloads pages concurrently and converts them to markdown. Without a query it fits whole pages to the token budget (default 2,000). With `query`/`keywords` it returns ranked passages. `precise: true` adds a cross-encoder reranker. It also reads JSON API responses and the data embedded in JavaScript-shell pages.
+- `fetch(urls[], query?, keywords?, max_tokens?, precise?)` downloads pages concurrently and converts them to markdown. Without a query it fits whole pages to the token budget (default 2,000). With `query`/`keywords` it returns ranked passages. `precise: true` adds a cross-encoder reranker. It also reads PDFs (from a URL or a local path; passages are labelled `p.N`), JSON API responses and the data embedded in JavaScript-shell pages.
 - `links(url, query?, keywords?, max_links?)` lists a page's links, ranked by the query if given.
 - `crawl(url, query, keywords?, max_pages?, max_depth?, other_sites?, max_results?)` does a best-first crawl from a start page and returns the most relevant pages as URLs with one-line snippets.
 
-Quality: the eval has 19 cases, 4 of them from real use; 17 pass (`cargo run --release --example eval`). The two failures are a hard paraphrase and a location query on a Google Careers posting. Benchmark results are below.
+Quality: the eval has 26 cases (6 of them PDFs), 4 from real use; 23 pass (`cargo run --release --example eval`), including all 6 PDF cases. The three failures are a hard paraphrase, a location query on a Google Careers posting, and "who designed Rust and when" on Wikipedia (the page says "created"; it passes with the keyword `Graydon Hoare`). Benchmark results are below.
 
 ## Commands
 
 - Build: `cargo build` (release: `cargo build --release`). The registered MCP server runs `target/release/web-shooter`, so rebuild in release mode; open Claude Code sessions pick it up after `/mcp` reconnect or a restart.
 - Test: `cargo test`
-- Ranking test set: `cargo run --release --example eval`. Flags: `-v` prints the output of failed cases and the top passage of misranked ones, `--refresh` refetches page snapshots, `--precise` adds the reranker, `--sweep` compares reranker settings, `--bm25` ranks without embeddings, `--heldout` runs `eval/heldout.json` (8 cases kept out of tuning; currently 8/8 found, 6/8 top). `bench` also takes `--heldout`. Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
-- Debug one page: `cargo run --release --example probe -- <url> [variant]`. It prints each converter setting's output size and the extraction time to stderr. Pass `final` (or `plain`, `main`, `readability`, …) to print that markdown, or `rank "<query>"` to print the top 8 chunks with their scores.
+- Ranking test set: `cargo run --release --example eval`. Flags: `-v` prints the output of failed cases and the top passage of misranked ones, `--refresh` refetches page snapshots, `--precise` adds the reranker, `--sweep` compares reranker settings, `--bm25` ranks without embeddings, `--heldout` runs `eval/heldout.json` (13 cases kept out of tuning, 5 of them PDFs; currently 13/13 found, 10/13 top. The PDF miss on top is NIST SP 800-63B's password length). `bench` also takes `--heldout`. Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
+- Debug one page: `cargo run --release --example probe -- <url> [variant]`. It prints each converter setting's output size and the extraction time to stderr. The URL may be a local PDF path. Pass `final` (or `plain`, `main`, `readability`, …) to print that markdown, or `rank "<query>"` to print the top 8 chunks with their scores.
 - Benchmark against Firecrawl and Jina Reader (live network, ~14 Firecrawl credits per run): `FIRECRAWL_API_KEY=… cargo run --release --example bench`. Never write the key into the repo.
 - Run the server by hand: `./target/release/web-shooter`. It speaks JSON-RPC on stdin/stdout, so log only to stderr.
 - Register with Claude Code: `claude mcp add --scope user web-shooter -- /absolute/path/to/target/release/web-shooter`
@@ -56,6 +56,7 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 - `src/tools/crawl.rs`: `BinaryHeap` frontier. A link's priority is 0.7 × its own text score + 0.3 × the relevance of the page it was found on, both from `rank::absolute`.
 - `src/fetcher.rs`: the HTTP client (`spider::reqwest`) and single-page fetch with one retry on 5xx.
 - `src/extract.rs`: response → markdown. One `lol_html` pass collects the title, canonical URL, links (with anchor text and heading), and inline scripts; it also drops MathML and icon glyphs. Then `spider_transformations` converts the main content and `tidy` removes noise.
+- `src/pdf.rs`: PDF → markdown. `pdf_oxide` gives positioned text spans; web-shooter builds lines (a row split at wide gaps), drops running headers/footers (repeated lines among the 3 highest and 3 lowest on a page, digits ignored), orders two-column pages (`find_gutter`, then split lines merged across the gap), recovers headings (`Style`) and joins paragraphs. It writes a `[p.N]` line before each page's first paragraph; `chunk` turns those into `Chunk::pdf_page`, and `pack` prints `· p.N`. The title goes to the page header, not the markdown.
 - `src/data.rs`: JSON → markdown. Arrays of objects become one `##` section per record (title from a `title`/`name`-like key), short fields on one line, long or HTML fields as text. `embedded_json` finds JSON in inline scripts: `JSON.parse('…')` strings, `= {…}` literals, and JSON script bodies.
 - `src/links.rs`: `Link`, URL normalisation and filtering, same-site checks.
 - `src/chunk.rs`: chunking, back-matter skipping (References, Notes, External links…), the section outline, `MD_LINK` and `prose_share`.
@@ -103,7 +104,20 @@ Extraction:
 - Icon-font glyph names ("place", "arrow_back") are replaced with a space: aria-hidden `<i>`/`<span>` and Material icon classes. Aria-hidden `<script>` is left alone because it can hold page data.
 - Pages whose markdown has under 200 visible characters are treated as JavaScript shells, and every inline script that can hold data (no `src`, JS or JSON type) goes through `data::embedded_json`. The rendered blobs are sorted by prose (letters in lines of 6+ words) so content comes before config: on Zoho a font list came first, so `fetch` without a query showed only fonts. JSON keys containing `/` are skipped, because they are asset manifests (Zoho's ran to 1.6 MB of markdown). JSON stored inside JSON strings is parsed and rendered.
 - Text from separate text nodes is joined with a space (`extract::push_text`) so `<span>Title</span><span>London</span>` doesn't become "TitleLondon".
-- Markdown links can contain parentheses in the URL (`…/Search_engine_(computing)`). `chunk::MD_LINK` allows one level and is used by chunking, ranking and crawl. The simpler `[^)]*` patterns in `extract::tidy` and `rank::LINK_URL` cut such URLs short, which is harmless there.
+- Markdown links can contain parentheses in the URL (`…/Search_engine_(computing)`). `chunk::MD_LINK` allows one level and is used by chunking, ranking and crawl. `extract::tidy` allows it too (with `[^)]*` it left `&action=edit&section=36)]` behind on Wikipedia articles with parentheses in the title). `rank::LINK_URL` still uses `[^)]*`, which only cuts such URLs short for scoring.
+- `<pre>` text is taken from the HTML in the `lol_html` pass and put back after conversion (`extract::restore_code`), because the converter strips code indentation and doubles backslashes.
+
+PDFs:
+- `pdf_oxide` (pure Rust, MIT/Apache) parses; its own `to_markdown` is not used, because on Raft it bolded every word and on BERT it scrambled the title block. `pdf-extract` reads in the right order but gives no font data. `mupdf` (AGPL) and pdfium (native library per platform) were ruled out. It's built with `default-features = false` plus `legacy-crypto` (RC4 for older encrypted PDFs); it adds 4 MB to the release binary (45.9 → 49.8 MB).
+- Boldness comes from the font name first (`Bold`, `Medi`… vs `Regu`, `Roman`…): Raft's fonts all report weight 700. A line is bold only if 95% of its letters are, so run-in labels ("**Masked LM** As-") aren't headings.
+- Heading level: from the section number (`3.2` → `###`), else the level that numbered headings of the same font style have (so "Abstract" and "References" sit beside "1 Introduction"), else the style's rank by size.
+- Hyphens at line ends are removed unless the stem already has one (`state-of-the-`), the next word does (`English-` + `to-German`), or the document writes the joined word with a hyphen elsewhere (`task-specific`).
+- Spans marked as artifacts (tagged PDFs' headers, footers, watermarks) and rotated spans (arXiv margin stamps) are dropped. Zero-width ligature spans get an estimated width so `Speci`+`fi`+`cations` doesn't gain a space.
+- Limits: 25 MB, 1,000 pages, 10 s of conversion (then it stops with a note). Under 200 letters and digits in total means no text layer: the error says OCR isn't supported.
+- Local paths (`/…`, `~/…`, `file://…`) are read only if the file is a PDF (`fetcher::local_path`, `fetch::read_local`); `fetch` is a web reader and shouldn't hand out other local files.
+- `chunk::is_back_matter` ignores a leading section number, so `7 References` is skipped.
+- Without a query, a page that is cut short ends with a `sections:` list (HTML too).
+- Weak spots: tables come out as rows of text, equations as loose symbols, and a heading that shares a baseline with an equation in the other column can be missed (BERT "5 Ablation Studies"). Wrapped table-of-contents entries can become headings (IRS Publication 15).
 
 Fetching and crawling:
 - The HTTP client sends browser `Accept`/`Accept-Language` headers (uber.com returned 406 without them) and an honest user agent, `web-shooter/<version>`. It retries a 5xx once after 500 ms.
@@ -137,8 +151,8 @@ Dual MIT/Apache-2.0. `dist-workspace.toml` and `.github/workflows/release.yml` c
 | M4 | Cross-encoder reranker | done (opt-in via `precise`) |
 | M6 | `links` and `crawl` with the scored frontier and early stop | done |
 | M7 | Benchmark against Firecrawl and Jina, real-use fixes, held-out cases | in progress: single-page benchmark and real-use fixes done; held-out cases and the crawl comparison remain (the crawl comparison costs Firecrawl credits, so ask first) |
-| v2 | Headless Chrome fallback, only when plain HTTP returns an empty shell | proposed next, ahead of M8, because 4 of the user's failing sites need it; not yet agreed |
-| M8 | PDF support (research papers) | planned |
+| M8 | PDF support (research papers) | done (2026-10-23): inside `fetch`, URLs and local paths, pure Rust |
+| v2 | Headless Chrome fallback, only when plain HTTP returns an empty shell | proposed next, because 4 of the user's failing sites need it; not yet agreed |
 | M5 | SQLite cache with ETag | planned last; needs expiry, size cap and an off switch (see "No data is kept") |
 
 Keep adding the user's real queries to `eval/cases.json`. `eval/heldout.json` holds cases that must never be used for tuning, so there is an honest held-out number; grow it, don't tune on it.

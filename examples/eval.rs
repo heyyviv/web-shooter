@@ -55,7 +55,11 @@ async fn main() -> anyhow::Result<()> {
     let has = |flag: &str| args.iter().any(|a| a == flag);
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("eval");
-    let file = if has("--heldout") { "heldout.json" } else { "cases.json" };
+    let file = if has("--heldout") {
+        "heldout.json"
+    } else {
+        "cases.json"
+    };
     let cases: Vec<Case> = serde_json::from_str(&fs::read_to_string(root.join(file))?)?;
     let pages = load_pages(&cases, &root.join("snapshots"), has("--refresh")).await?;
     let embedder = if has("--bm25") { None } else { embed::load() };

@@ -97,10 +97,11 @@ Passing `keywords` (exact terms or synonyms) costs the assistant almost nothing 
 
 ## Reading difficult pages
 
-web-shooter reads three kinds of content without a browser: text in the HTML, data embedded in a page's scripts, and JSON from APIs. It cannot run JavaScript, so pages that fetch their content after loading still come back empty.
+web-shooter reads four kinds of content without a browser: text in the HTML, data embedded in a page's scripts, JSON from APIs, and PDFs. It cannot run JavaScript, so pages that fetch their content after loading still come back empty.
 
 - **JSON APIs.** If a URL returns JSON, each record (for example each job) becomes its own section, with short fields on one line and long text as paragraphs. Ranking can then pick out just the matching records.
 - **JavaScript-shell pages.** If a page has almost no visible text, web-shooter searches its inline scripts for data: JSON blocks, `window.x = {…}` assignments and `JSON.parse('…')` strings. Data with the most real sentences goes first, so content beats config such as font lists.
+- **PDFs.** A response or local file that starts with `%PDF-` is converted in pure Rust (`pdf_oxide` parses it; the layout is rebuilt by web-shooter). Text spans are grouped into lines, a two-column page is read down the left column and then the right, running headers, footers, page numbers and arXiv margin stamps are dropped, and headings are recovered from font size, boldness and section numbers (`3.2 Attention` nests under `3 Model`). Words hyphenated at line ends are rejoined unless the document writes them with a hyphen elsewhere. Each passage is labelled with its page (`§ 5.3 Log replication · p.7`), and References sections are skipped like on web pages. A typical paper converts in about 50 ms and the 194-page HTTP spec in about 240 ms. Scanned PDFs without a text layer return an error, since there is no OCR. Files over 25 MB are refused, and conversion stops after 10 seconds with what it has.
 - **Noise removed on the way:** asset manifests, MathML formulas, icon-font names such as “place” or “arrow\_back”, citation markers and edit links.
 
 Results from the first real use, a job search on 2026-10-11:
@@ -178,14 +179,13 @@ Tools for working on web-shooter itself:
 
 ## Limitations and roadmap
 
-The biggest gap is JavaScript: four of the sites that failed in real use need a browser. A built-in headless Chrome fallback is the proposed next step, ahead of PDF support.
+The biggest gap is JavaScript: four of the sites that failed in real use need a browser. A built-in headless Chrome fallback is the proposed next step.
 
 | Next | What it adds | Status |
 | --- | --- | --- |
 | Chrome fallback | Renders a page in headless Chrome only when plain HTTP returns an empty shell, then ranks it like any other page. About 1–5 s per such page | Proposed next; not yet agreed |
 | Held-out test cases | Cases never used for tuning, ideally from real queries, for an honest accuracy number | In progress |
 | Crawl benchmark | `crawl` compared with Firecrawl's crawl | Waiting for agreement to spend Firecrawl credits |
-| PDF support | Reading research papers and other PDFs | Planned |
 | Page cache | Instant repeat fetches, stored in SQLite | Planned last; needs expiry, a size cap and an off switch |
 
 Known ranking gap: a vague question can miss a fact that has no label on the page. Asking “job location” missed “Google Bengaluru, Karnataka, India”; passing the city as a keyword finds it.

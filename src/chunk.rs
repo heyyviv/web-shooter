@@ -2,6 +2,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::pdf::PAGE_MARKER;
+
 /// A chunk grows until it reaches this size, then a new one starts at the
 /// next line. About 200 tokens: big enough to carry context, small enough
 /// that a relevant chunk isn't mostly padding.
@@ -20,6 +22,8 @@ pub struct Chunk {
     /// Headings above this chunk, e.g. `Crawling policy > Selection policy`.
     pub heading_path: String,
     pub text: String,
+    /// PDF page the chunk starts on, from the `[p.N]` markers.
+    pub pdf_page: Option<u32>,
 }
 
 /// Back-matter sections: citation lists that match many queries by accident
@@ -35,9 +39,13 @@ const SKIP_SECTIONS: &[&str] = &[
     "external links",
 ];
 
+/// Compared without a leading section number, as PDFs number them (`7 References`).
 fn is_back_matter(heading: &str) -> bool {
     let h = heading.to_lowercase();
-    SKIP_SECTIONS.contains(&h.as_str())
+    let h = h
+        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.')
+        .trim();
+    SKIP_SECTIONS.contains(&h)
 }
 
 /// A markdown link; the URL may contain one level of parentheses, as in
@@ -62,8 +70,14 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
     let mut headings: Vec<(usize, String)> = Vec::new();
     let mut buf = String::new();
     let mut in_code = false;
+    // The PDF page of the current line, and of the first line in `buf`.
+    let mut pdf_page: Option<u32> = None;
+    let mut start_page: Option<u32> = None;
 
-    let flush = |buf: &mut String, headings: &[(usize, String)], chunks: &mut Vec<Chunk>| {
+    let flush = |buf: &mut String,
+                 headings: &[(usize, String)],
+                 pdf_page: Option<u32>,
+                 chunks: &mut Vec<Chunk>| {
         let text = buf.trim();
         if text.is_empty() || headings.iter().any(|(_, h)| is_back_matter(h)) {
             buf.clear();
@@ -87,6 +101,7 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
                 index: chunks.len(),
                 heading_path,
                 text: text.to_string(),
+                pdf_page,
             });
         }
         buf.clear();
@@ -96,20 +111,27 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
         if line.starts_with("```") {
             in_code = !in_code;
         }
+        if !in_code && let Some(c) = PAGE_MARKER.captures(line) {
+            pdf_page = c[1].parse().ok();
+            continue;
+        }
         if !in_code && let Some((level, text)) = heading(line) {
-            flush(&mut buf, &headings, &mut chunks);
+            flush(&mut buf, &headings, start_page, &mut chunks);
             headings.retain(|(l, _)| *l < level);
             headings.push((level, text));
             continue;
+        }
+        if buf.trim().is_empty() {
+            start_page = pdf_page;
         }
         buf.push_str(line);
         buf.push('\n');
         // Code blocks are kept whole unless they get very long.
         if buf.len() >= TARGET_BYTES && (!in_code || buf.len() >= TARGET_BYTES * 3) {
-            flush(&mut buf, &headings, &mut chunks);
+            flush(&mut buf, &headings, start_page, &mut chunks);
         }
     }
-    flush(&mut buf, &headings, &mut chunks);
+    flush(&mut buf, &headings, start_page, &mut chunks);
     chunks
 }
 
@@ -189,6 +211,24 @@ mod tests {
         let md = "## Policy\nVisit rules.\n## References\n### Books\n1. Cho (2000).\n## See also\nOther crawlers.";
         let paths: Vec<String> = chunk(0, md).into_iter().map(|c| c.heading_path).collect();
         assert_eq!(paths, vec!["Policy", "See also"]);
+    }
+
+    #[test]
+    fn chunks_carry_the_pdf_page_they_start_on() {
+        let md = "[p.1]\n\n## 1 Intro\nFirst page text.\n[p.2]\nSecond page text.\n## 2 Method\nMore.\n## 7 References\n[1] A. Paper.";
+        let got: Vec<(String, Option<u32>)> = chunk(0, md)
+            .into_iter()
+            .map(|c| (c.heading_path, c.pdf_page))
+            .collect();
+        assert_eq!(
+            got,
+            vec![("1 Intro".into(), Some(1)), ("2 Method".into(), Some(2))]
+        );
+        assert!(
+            chunk(0, md)[0]
+                .text
+                .contains("First page text.\nSecond page text.")
+        );
     }
 
     #[test]

@@ -16,8 +16,9 @@ use crate::{
     },
 };
 
-const INSTRUCTIONS: &str = "Fast web reader and focused crawler. `fetch` reads pages you \
-already have URLs for (pass a query to get only the relevant passages, and batch URLs). \
+const INSTRUCTIONS: &str = "Fast web reader and focused crawler. `fetch` reads pages and PDFs \
+you already have URLs or local paths for (pass a query to get only the relevant passages, \
+and batch URLs). \
 `links` lists a page's links ranked by a query. `crawl` explores a site from a start page \
 and returns the most relevant pages as URLs with snippets; then `fetch` the ones you need.";
 
@@ -45,7 +46,7 @@ impl WebShooter {
     }
 
     #[tool(
-        description = "Read one or more web pages as clean markdown. With `query`, returns only the most relevant passages within `max_tokens`."
+        description = "Read one or more web pages or PDFs (URLs, or local PDF paths) as clean markdown. With `query`, returns only the most relevant passages within `max_tokens`; PDF passages are labelled with their page number."
     )]
     async fn fetch(
         &self,

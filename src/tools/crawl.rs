@@ -424,6 +424,7 @@ mod tests {
                 "[Rust engineer](https://x.com/1)\n> **> Note **> : x](https://y.z)[\n{}",
                 "word ".repeat(100)
             ),
+            pdf_page: None,
         };
         let s = snippet(&c);
         assert!(s.starts_with("Jobs: Rust engineer Note : x word"), "{s}");

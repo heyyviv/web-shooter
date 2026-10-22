@@ -17,6 +17,7 @@ anyhow = "1.0.104"
 fastembed = { version = "7.1.1", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
 futures = "0.3.34"
 lol_html = "2"
+pdf_oxide = { version = "0.3.78", default-features = false, features = ["legacy-crypto"] }
 model2vec-rs = { version = "0.3.0", default-features = false, features = ["hf-hub", "fancy-regex"] }
 regex = "1.13.1"
 rmcp = { version = "3.5.1", features = ["server", "transport-io", "macros"] }

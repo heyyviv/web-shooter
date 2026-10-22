@@ -9,6 +9,7 @@ use crate::{
     fetcher,
     models::ModelSet,
     pack::{PageOut, pack, pack_passages},
+    pdf,
     rank::{self, Models, RankConfig},
     tools::query_text,
 };
@@ -21,7 +22,7 @@ const CONCURRENCY: usize = 16;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FetchParams {
-    /// Pages to read. Pass several URLs in one call rather than calling once per URL.
+    /// Pages or PDFs to read (URLs, or absolute paths of local PDF files). Pass several in one call rather than calling once per URL.
     pub urls: Vec<String>,
     /// What you are looking for. When set, only the most relevant passages are returned.
     pub query: Option<String>,
@@ -89,6 +90,9 @@ pub fn respond(
 }
 
 pub async fn fetch_one(client: &Client, url: &str) -> PageOut {
+    if let Some(path) = fetcher::local_path(url) {
+        return read_local(path).await;
+    }
     let fetched = fetcher::fetch(client, url).await;
     if !(200..300).contains(&fetched.status) {
         return PageOut::error(fetched.url, format!("HTTP {}", fetched.status));
@@ -97,6 +101,31 @@ pub async fn fetch_one(client: &Client, url: &str) -> PageOut {
     let url = fetched.url.clone();
     let extracted = tokio::task::spawn_blocking(move || extract(&fetched.url, &fetched.body)).await;
     page_out(url, extracted.ok())
+}
+
+/// Read a local PDF file. Other local files are refused: `fetch` reads the
+/// web, and a PDF on disk is the one case where a local copy is the source.
+async fn read_local(path: std::path::PathBuf) -> PageOut {
+    let shown = path.display().to_string();
+    let read = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        let size = std::fs::metadata(&path)
+            .map_err(|e| format!("cannot read file: {e}"))?
+            .len();
+        if size > pdf::MAX_BYTES as u64 {
+            return Err(format!("file is larger than {} MB", pdf::MAX_BYTES >> 20));
+        }
+        let body = std::fs::read(&path).map_err(|e| format!("cannot read file: {e}"))?;
+        if !pdf::is_pdf(&body) {
+            return Err("not a PDF; only local PDF files can be read".to_string());
+        }
+        Ok(extract(&path.display().to_string(), &body))
+    })
+    .await;
+    match read {
+        Ok(Ok(extracted)) => page_out(shown, Some(extracted)),
+        Ok(Err(e)) => PageOut::error(shown, e),
+        Err(_) => page_out(shown, None),
+    }
 }
 
 /// Wrap an extraction result as a page, turning empty or failed ones into errors.
@@ -110,6 +139,7 @@ pub fn page_out(url: String, extracted: Option<crate::extract::Extracted>) -> Pa
             links: e.links,
             canonical: e.canonical,
         },
+        Some(e) if e.error.is_some() => PageOut::error(url, e.error.unwrap_or_default()),
         Some(_) => PageOut::error(url, "no readable content (the page may need JavaScript)"),
         None => PageOut::error(url, "extraction failed"),
     }

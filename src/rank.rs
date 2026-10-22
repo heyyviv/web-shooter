@@ -317,6 +317,7 @@ mod tests {
             index: 0,
             heading_path: heading.into(),
             text: text.into(),
+            pdf_page: None,
         }
     }
 

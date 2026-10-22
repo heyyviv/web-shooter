@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use spider::{
     page::Page,
@@ -6,6 +9,7 @@ use spider::{
         Client,
         header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue},
     },
+    url::Url,
 };
 
 /// Sent with every request and matched against robots.txt rules.
@@ -60,6 +64,20 @@ pub async fn fetch(client: &Client, url: &str) -> Fetched {
         status: page.status_code.as_u16(),
         body: page.get_html_bytes_u8().to_vec(),
     }
+}
+
+/// The file a local path or `file://` URL names: `/abs/path`, `~/path`, or
+/// a Windows path like `C:\docs\a.pdf`. `None` for web URLs and bare domains.
+pub fn local_path(url: &str) -> Option<PathBuf> {
+    let url = url.trim();
+    if url.starts_with("file://") {
+        return Url::parse(url).ok()?.to_file_path().ok();
+    }
+    if let Some(rest) = url.strip_prefix("~/") {
+        return std::env::var_os("HOME").map(|home| PathBuf::from(home).join(rest));
+    }
+    let path = Path::new(url);
+    (url.starts_with('/') || path.is_absolute()).then(|| path.to_path_buf())
 }
 
 fn normalize(url: &str) -> String {

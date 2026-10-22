@@ -48,9 +48,29 @@ pub fn pack(pages: &[PageOut], max_tokens: usize) -> String {
         })
         .collect();
 
-    // Headers and possible truncation notes come out of the budget first.
+    // Pages likely to be cut list their sections, so the caller can ask for one.
+    let likely_cut =
+        |p: &PageOut| p.ok && estimate_tokens(&p.body) > max_tokens / pages.len().max(1);
+    let outlines: Vec<String> = pages
+        .iter()
+        .map(|p| {
+            let sections = if likely_cut(p) {
+                outline(&p.body, OUTLINE_MAX)
+            } else {
+                Vec::new()
+            };
+            if sections.is_empty() {
+                String::new()
+            } else {
+                format!("\nsections: {}", sections.join(" · "))
+            }
+        })
+        .collect();
+
+    // Headers, possible truncation notes and outlines come out of the budget first.
     let overhead: usize = headers.iter().map(|h| estimate_tokens(h)).sum::<usize>()
-        + pages.len() * estimate_tokens(TRUNCATION_NOTE);
+        + pages.len() * estimate_tokens(TRUNCATION_NOTE)
+        + outlines.iter().map(|o| estimate_tokens(o)).sum::<usize>();
     let mut remaining = max_tokens.saturating_sub(overhead);
 
     let mut order: Vec<usize> = (0..pages.len()).filter(|&i| pages[i].ok).collect();
@@ -71,6 +91,7 @@ pub fn pack(pages: &[PageOut], max_tokens: usize) -> String {
             if body.len() < page.body.len() {
                 let left = estimate_tokens(&page.body) - estimate_tokens(body);
                 out.push_str(&TRUNCATION_NOTE.replace("{left}", &left.to_string()));
+                out.push_str(&outlines[i]);
             }
         }
         out.push_str("\n\n");
@@ -157,7 +178,7 @@ pub fn pack_passages(
         picked.sort_by_key(|&i| chunks[i].index);
 
         // Merge runs of neighbouring chunks under the same headings.
-        let mut groups: Vec<(String, f32, String)> = Vec::new();
+        let mut groups: Vec<(String, Option<u32>, f32, String)> = Vec::new();
         let mut prev: Option<&Chunk> = None;
         for &i in picked.iter() {
             let c = &chunks[i];
@@ -166,21 +187,22 @@ pub fn pack_passages(
                 (Some(pc), Some(g))
                     if pc.index + 1 == c.index && pc.heading_path == c.heading_path =>
                 {
-                    g.1 = g.1.max(relative);
-                    g.2.push('\n');
-                    g.2.push_str(&c.text);
+                    g.2 = g.2.max(relative);
+                    g.3.push('\n');
+                    g.3.push_str(&c.text);
                 }
-                _ => groups.push((c.heading_path.clone(), relative, c.text.clone())),
+                _ => groups.push((c.heading_path.clone(), c.pdf_page, relative, c.text.clone())),
             }
             prev = Some(c);
         }
-        for (heading, score, text) in groups {
+        for (heading, pdf_page, score, text) in groups {
             let heading = if heading.is_empty() {
                 "(top)"
             } else {
                 &heading
             };
-            out.push_str(&format!("§ {heading} · {score:.2}\n{text}\n"));
+            let page = pdf_page.map(|n| format!(" · p.{n}")).unwrap_or_default();
+            out.push_str(&format!("§ {heading}{page} · {score:.2}\n{text}\n"));
         }
 
         // Point at other sections only when part of the page was left out.
@@ -243,6 +265,29 @@ mod tests {
     }
 
     #[test]
+    fn cut_pages_list_their_sections() {
+        let body = format!(
+            "## Abstract\n{}\n## 1 Introduction\nx\n## 2 Method\ny",
+            "a ".repeat(800)
+        );
+        let out = pack(&[page(&body)], 200);
+        assert!(
+            out.ends_with("sections: Abstract · 1 Introduction · 2 Method"),
+            "{out}"
+        );
+        assert!(estimate_tokens(&out) <= 200);
+        assert!(!pack(&[page("## Short\nx")], 200).contains("sections:"));
+    }
+
+    #[test]
+    fn passages_show_the_pdf_page() {
+        let mut c = chunk(0, 0, "3 Results", "BLEU 28.4");
+        c.pdf_page = Some(7);
+        let out = pack_passages(&[page("x")], &[c], &[1.0], 0.4, 100);
+        assert!(out.contains("§ 3 Results · p.7 · 1.00\nBLEU 28.4"), "{out}");
+    }
+
+    #[test]
     fn errors_use_no_body_budget() {
         let mut failed = page("HTTP 404");
         failed.ok = false;
@@ -257,6 +302,7 @@ mod tests {
             index,
             heading_path: heading.into(),
             text: text.into(),
+            pdf_page: None,
         }
     }
 

@@ -58,7 +58,11 @@ struct Run {
 async fn main() -> anyhow::Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("eval");
     let heldout = std::env::args().any(|a| a == "--heldout");
-    let file = if heldout { "heldout.json" } else { "cases.json" };
+    let file = if heldout {
+        "heldout.json"
+    } else {
+        "cases.json"
+    };
     let cases: Vec<Case> = serde_json::from_str(&fs::read_to_string(root.join(file))?)?;
     let external = Client::builder().timeout(Duration::from_secs(60)).build()?;
     let firecrawl_key = std::env::var("FIRECRAWL_API_KEY").ok();
