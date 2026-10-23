@@ -20,7 +20,7 @@ pub const DEFAULT_MAX_TOKENS: usize = 2000;
 /// Pages fetched at the same time within one call.
 const CONCURRENCY: usize = 16;
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct FetchParams {
     /// Pages or PDFs to read (URLs, or absolute paths of local PDF files). Pass several in one call rather than calling once per URL.
     pub urls: Vec<String>,
@@ -30,6 +30,7 @@ pub struct FetchParams {
     pub keywords: Option<Vec<String>>,
     /// Maximum tokens to return across all pages (default 2000).
     pub max_tokens: Option<usize>,
+    #[cfg(feature = "rerank")]
     /// Rescore passages with a slower, more precise model (~0.3 s more, fewer tokens). Off by default.
     pub precise: Option<bool>,
 }
@@ -40,7 +41,10 @@ pub async fn run(client: &Client, models: &ModelSet, params: FetchParams) -> Str
         .buffered(CONCURRENCY)
         .collect()
         .await;
+    #[cfg(feature = "rerank")]
     let precise = params.precise.unwrap_or(false);
+    #[cfg(not(feature = "rerank"))]
+    let precise = false;
     if params.query.is_some() || params.keywords.is_some() {
         // Wait for the models so the first query isn't ranked without them.
         models.wait(precise).await;

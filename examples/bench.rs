@@ -103,12 +103,14 @@ async fn main() -> anyhow::Result<()> {
     names.extend(tools.iter().map(|(n, _)| *n));
     let mut runs: Vec<Vec<Run>> = Vec::new();
     for case in &cases {
+        // `precise` exists only with the `rerank` feature.
+        #[allow(clippy::needless_update)]
         let params = FetchParams {
             urls: case.urls.clone(),
             query: Some(case.query.clone()),
             keywords: case.keywords.clone(),
             max_tokens: None,
-            precise: None,
+            ..Default::default()
         };
         let client = fetcher::build_client()?;
         let t = Instant::now();

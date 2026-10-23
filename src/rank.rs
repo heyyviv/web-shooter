@@ -3,7 +3,6 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use fastembed::TextRerank;
 use model2vec_rs::model::StaticModel;
 use regex::Regex;
 use rust_stemmers::{Algorithm, Stemmer};
@@ -150,7 +149,7 @@ impl Default for RankConfig {
 #[derive(Clone, Copy, Default)]
 pub struct Models<'a> {
     pub embedder: Option<&'a StaticModel>,
-    pub reranker: Option<&'a Mutex<TextRerank>>,
+    pub reranker: Option<&'a Mutex<rerank::Model>>,
 }
 
 /// Chunk scores plus the relative cut-off that suits them.

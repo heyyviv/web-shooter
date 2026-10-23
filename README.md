@@ -28,11 +28,11 @@ work through the examples that illustrate them:
 
 | Tool | Use it when | Returns |
 | --- | --- | --- |
-| `fetch(urls, query?, keywords?, max_tokens?, precise?)` | You have URLs and want their content | With a query: the best passages, grouped by page. Without: whole pages trimmed to `max_tokens` (default 2,000) |
+| `fetch(urls, query?, keywords?, max_tokens?)` | You have URLs and want their content | With a query: the best passages, grouped by page. Without: whole pages trimmed to `max_tokens` (default 2,000) |
 | `links(url, query?, keywords?, max_links?)` | You want to choose which page to read next | The page's links, ranked by the query if given |
 | `crawl(url, query, keywords?, max_pages?, max_depth?, other_sites?, max_results?)` | You have a start page and a goal, not the URLs | The most relevant pages found, as URLs with a one-line snippet each |
 
-`fetch` also reads PDFs, from a URL or a local path (`/path/paper.pdf`, `~/…`, `file://…`): headings are recovered from font sizes and section numbers, two-column papers are read column by column, running headers and footers are dropped, and each passage is labelled with its page (`§ 5.3 Log replication · p.7`). It reads JSON API responses (one section per record) and the data embedded in JavaScript-rendered pages too. `precise: true` adds a slower cross-encoder reranker (about 300 ms more, about a third fewer tokens). `crawl` respects robots.txt, stays on the start site by default, fetches 4 pages at a time and stops after 30 pages or 30 seconds by default.
+`fetch` also reads PDFs, from a URL or a local path (`/path/paper.pdf`, `~/…`, `file://…`): headings are recovered from font sizes and section numbers, two-column papers are read column by column, running headers and footers are dropped, and each passage is labelled with its page (`§ 5.3 Log replication · p.7`). It reads JSON API responses (one section per record) and the data embedded in JavaScript-rendered pages too. `crawl` respects robots.txt, stays on the start site by default, fetches 4 pages at a time and stops after 30 pages or 30 seconds by default.
 
 ## Setup
 
@@ -61,7 +61,9 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # if you don't 
 cargo install --git https://github.com/heyyviv/web-shooter
 ```
 
-The first build downloads dependencies, including ONNX Runtime for the optional reranker, and takes a few minutes.
+The first build downloads dependencies and takes a few minutes.
+
+To include the optional cross-encoder reranker, build with `--features rerank`. It adds a `precise` option to `fetch` (about 300 ms more per call, about a third fewer tokens, no better at ranking in our tests), ONNX Runtime to the binary (15 MB → 35 MB) and a 1.1 GB model download on first use.
 
 ### 2. Register it with your MCP client
 
@@ -87,7 +89,7 @@ Then start a new session, or run `/mcp` to connect. Check with `claude mcp list`
 
 ### 3. First run
 
-The first query downloads the embedding model (`minishlab/potion-retrieval-32M`, about 130 MB, roughly 30 seconds) into the Hugging Face cache, `~/.cache/huggingface`. After that it loads in about 50 ms. The reranker (about 1.1 GB) downloads only on the first `precise: true` call. If a model can't be downloaded, for example offline, ranking falls back to keyword matching instead of failing.
+The first query downloads the embedding model (`minishlab/potion-base-8M`, about 30 MB) into the Hugging Face cache, `~/.cache/huggingface`. After that it loads in about 20 ms, and the server uses about 90 MB of memory. If you built with the reranker, it (about 1.1 GB) downloads only on the first `precise: true` call. If a model can't be downloaded, for example offline, ranking falls back to keyword matching instead of failing.
 
 ### Updating
 
@@ -104,7 +106,7 @@ claude mcp remove --scope user web-shooter
 This only unregisters it. To free the disk space too, delete the binary (`rm ~/.cargo/bin/web-shooter`) and the cached models:
 
 ```sh
-rm -rf ~/.cache/huggingface/hub/models--minishlab--potion-retrieval-32M \
+rm -rf ~/.cache/huggingface/hub/models--minishlab--potion-base-8M \
        ~/.cache/huggingface/hub/models--jinaai--jina-reranker-v2-base-multilingual
 ```
 
@@ -127,7 +129,7 @@ Tips:
 | Environment variable | Effect |
 | --- | --- |
 | `WEB_SHOOTER_EMBED_MODEL` | A different model2vec embedding model (Hugging Face repo id or local folder) |
-| `WEB_SHOOTER_RERANK_MODEL` | A different reranker for `precise`: `bge-base`, `bge-m3` or `jina-turbo` |
+| `WEB_SHOOTER_RERANK_MODEL` | A different reranker for `precise` (only with `--features rerank`): `bge-base`, `bge-m3` or `jina-turbo` |
 | `HF_HOME` | Where models are cached (default `~/.cache/huggingface`) |
 
 ## What it can't read yet

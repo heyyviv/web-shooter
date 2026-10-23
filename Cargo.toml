@@ -14,7 +14,7 @@ exclude = ["/eval/snapshots", "/CLAUDE.md", "/.github"]
 
 [dependencies]
 anyhow = "1.0.104"
-fastembed = { version = "7.1.1", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
+fastembed = { version = "7.1.1", optional = true, default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
 futures = "0.3.34"
 lol_html = "2"
 pdf_oxide = { version = "0.3.78", default-features = false, features = ["legacy-crypto"] }
@@ -28,7 +28,17 @@ spider = { version = "2.53.9", default-features = false, features = ["encoding",
 spider_transformations = "2.39.13"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "io-std"] }
 
-# The profile that 'dist' will build with
+[features]
+# The cross-encoder behind `fetch`'s `precise` option. Off by default: it adds
+# ONNX Runtime to the binary and didn't rank better than embeddings in the eval.
+rerank = ["dep:fastembed"]
+
+[profile.release]
+strip = true
+
+# The profile that 'dist' will build with. LTO and one codegen unit save
+# another ~2 MB but make a rebuild take minutes, so local builds skip them.
 [profile.dist]
 inherits = "release"
 lto = "thin"
+codegen-units = 1

@@ -16,7 +16,7 @@ The assistant sees three tools. Each returns compact markdown text, not JSON, be
 
 | Tool | Use it when | Parameters | Returns |
 | --- | --- | --- | --- |
-| `fetch` | You have URLs and want their content | `urls` (several per call), `query`, `keywords`, `max_tokens` (default 2,000), `precise` | With a query: the best passages, grouped by page. Without: whole pages, trimmed to the budget |
+| `fetch` | You have URLs and want their content | `urls` (several per call), `query`, `keywords`, `max_tokens` (default 2,000), `precise` (only in builds with the `rerank` feature) | With a query: the best passages, grouped by page. Without: whole pages, trimmed to the budget |
 | `links` | You want to pick which page to read next | `url`, `query`, `keywords`, `max_links` (default 30) | The page's links, ranked by the query if given |
 | `crawl` | You have a start page and a goal, but not the URLs | `url`, `query`, `keywords`, `max_pages` (30), `max_depth` (3), `other_sites`, `max_results` (10) | The most relevant pages found, as URLs with a one-line snippet each |
 
@@ -87,11 +87,11 @@ Ranking combines keyword matching with meaning matching and takes about 6 ms per
 | Stage | What it does | Why |
 | --- | --- | --- |
 | BM25 | Scores passages by shared words, with stemming (“crawlers” matches “crawler”) and hyphen joining (“re-visit” matches “revisit”) | Catches exact names, numbers and error codes |
-| Static embeddings | Compares the meaning of the query and each passage with `potion-retrieval-32M`, a small model that runs in microseconds per passage | Catches paraphrases (“salary” vs “compensation”) |
+| Static embeddings | Compares the meaning of the query and each passage with `potion-base-8M`, a small model that runs in microseconds per passage | Catches paraphrases (“salary” vs “compensation”) |
 | Fusion | Both scores scaled to 0–1, then 0.3 × keyword + 0.7 × meaning | Rank-based fusion (RRF) ranked as well but made every score look alike, so replies filled the whole budget |
 | Shape penalties | Halves the score of link lists (3+ links, little other text) and of very short passages (6 words or fewer) | Sidebars of “other jobs” and “Back to search” lines matched queries without answering them |
 | Cut-off | Drops passages below 70% of the best score | Keeps replies short; the assistant can ask again with other words |
-| Reranker (opt-in) | `precise: true` rescores the top 6 with a cross-encoder (Jina reranker v2) that reads query and passage together | About 33% fewer tokens, but no better at ranking on our tests and about 300 ms slower, so it is off by default |
+| Reranker (opt-in, `rerank` build feature) | `precise: true` rescores the top 6 with a cross-encoder (Jina reranker v2) that reads query and passage together | About 33% fewer tokens, but no better at ranking on our tests and about 300 ms slower, so it is off by default |
 
 Passing `keywords` (exact terms or synonyms) costs the assistant almost nothing and helps most when the answer has no words in common with the question.
 
@@ -147,7 +147,7 @@ web-shooter keeps no web data. A page exists only in memory during the one tool 
 Copies that exist outside web-shooter:
 
 - The passages it returns become part of the Claude Code conversation, which Claude Code saves in its own history.
-- The ranking models (about 130 MB, plus 1.1 GB for the optional reranker) are cached in `~/.cache/huggingface`. They contain no web data.
+- The ranking models (about 30 MB, plus 1.1 GB if you built with the optional reranker) are cached in `~/.cache/huggingface`. They contain no web data.
 
 Freed memory is released for reuse, not overwritten. If that matters for sensitive pages, page buffers can be wiped explicitly after each call at a small speed cost. A future page cache (milestone M5) would change this picture and needs agreement first, with expiry, a size cap and an off switch.
 
@@ -159,7 +159,7 @@ Full setup steps, including other MCP clients, are in the [README](../README.md#
 2. Register it: `claude mcp add --scope user web-shooter -- /absolute/path/to/target/release/web-shooter`
 3. Start a new session, or reconnect with `/mcp`. Run this again after every rebuild, because open sessions keep the old binary.
 
-The first query downloads the embedding model (about 30 seconds, once). The reranker downloads on the first `precise` call.
+The first query downloads the embedding model (about 30 MB, once). In builds with the reranker, it downloads on the first `precise` call.
 
 Example prompts:
 

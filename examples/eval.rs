@@ -169,13 +169,15 @@ fn run_all(
         .iter()
         .zip(pages)
         .map(|(case, pages)| {
+            // `precise` exists only with the `rerank` feature.
+            #[allow(clippy::needless_update)]
             let params = FetchParams {
                 urls: case.urls.clone(),
                 query: Some(case.query.clone()),
                 keywords: case.keywords.clone(),
                 max_tokens: case.max_tokens,
                 // `respond` takes the models directly; the reranker is in `models` or not.
-                precise: None,
+                ..Default::default()
             };
             let started = Instant::now();
             let out = respond(pages, &params, models, config);

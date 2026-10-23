@@ -4,8 +4,9 @@ use model2vec_rs::model::StaticModel;
 use tokio::sync::OnceCell;
 
 /// Default static embedding model. Override with `WEB_SHOOTER_EMBED_MODEL`
-/// (a Hugging Face repo id or a local folder).
-pub const DEFAULT_MODEL: &str = "minishlab/potion-retrieval-32M";
+/// (a Hugging Face repo id or a local folder). In the eval it ranked as well
+/// as `potion-retrieval-32M` with a quarter of the memory (88 vs 300 MB RSS).
+pub const DEFAULT_MODEL: &str = "minishlab/potion-base-8M";
 
 /// The embedding model, loaded once in the background.
 ///

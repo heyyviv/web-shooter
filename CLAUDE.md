@@ -13,17 +13,17 @@ Requirements stated by the user:
 ## Status
 
 Three MCP tools work and are in real use. The server is registered at user scope (`claude mcp add --scope user web-shooter`) and the user has used it for a job search:
-- `fetch(urls[], query?, keywords?, max_tokens?, precise?)` downloads pages concurrently and converts them to markdown. Without a query it fits whole pages to the token budget (default 2,000). With `query`/`keywords` it returns ranked passages. `precise: true` adds a cross-encoder reranker. It also reads PDFs (from a URL or a local path; passages are labelled `p.N`), JSON API responses and the data embedded in JavaScript-shell pages.
+- `fetch(urls[], query?, keywords?, max_tokens?, precise?)` downloads pages concurrently and converts them to markdown. Without a query it fits whole pages to the token budget (default 2,000). With `query`/`keywords` it returns ranked passages. `precise: true` adds a cross-encoder reranker, only in builds with the `rerank` cargo feature (off by default). It also reads PDFs (from a URL or a local path; passages are labelled `p.N`), JSON API responses and the data embedded in JavaScript-shell pages.
 - `links(url, query?, keywords?, max_links?)` lists a page's links, ranked by the query if given.
 - `crawl(url, query, keywords?, max_pages?, max_depth?, other_sites?, max_results?)` does a best-first crawl from a start page and returns the most relevant pages as URLs with one-line snippets.
 
-Quality: the eval has 26 cases (6 of them PDFs), 4 from real use; 23 pass (`cargo run --release --example eval`), including all 6 PDF cases. The three failures are a hard paraphrase, a location query on a Google Careers posting, and "who designed Rust and when" on Wikipedia (the page says "created"; it passes with the keyword `Graydon Hoare`). Benchmark results are below.
+Quality: the eval has 26 cases (6 of them PDFs), 4 from real use; 24 pass (top 22) with `potion-base-8M` (`cargo run --release --example eval`), including all 6 PDF cases. The two failures are a location query on a Google Careers posting and "who designed Rust and when" on Wikipedia (the page says "created"; it passes with the keyword `Graydon Hoare`). Benchmark results are below.
 
 ## Commands
 
 - Build: `cargo build` (release: `cargo build --release`). The registered MCP server runs `target/release/web-shooter`, so rebuild in release mode; open Claude Code sessions pick it up after `/mcp` reconnect or a restart.
 - Test: `cargo test`
-- Ranking test set: `cargo run --release --example eval`. Flags: `-v` prints the output of failed cases and the top passage of misranked ones, `--refresh` refetches page snapshots, `--precise` adds the reranker, `--sweep` compares reranker settings, `--bm25` ranks without embeddings, `--heldout` runs `eval/heldout.json` (13 cases kept out of tuning, 5 of them PDFs; currently 13/13 found, 10/13 top. The PDF miss on top is NIST SP 800-63B's password length). `bench` also takes `--heldout`. Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
+- Ranking test set: `cargo run --release --example eval`. Flags: `-v` prints the output of failed cases and the top passage of misranked ones, `--refresh` refetches page snapshots, `--precise` adds the reranker (needs `--features rerank`), `--sweep` compares reranker settings, `--bm25` ranks without embeddings, `--heldout` runs `eval/heldout.json` (13 cases kept out of tuning, 5 of them PDFs; currently 13/13 found, 11/13 top. The PDF miss on top is NIST SP 800-63B's password length). `bench` also takes `--heldout`. Run it after any change to extraction, chunking, ranking or packing, and report the before/after numbers.
 - Debug one page: `cargo run --release --example probe -- <url> [variant]`. It prints each converter setting's output size and the extraction time to stderr. The URL may be a local PDF path. Pass `final` (or `plain`, `main`, `readability`, …) to print that markdown, or `rank "<query>"` to print the top 8 chunks with their scores.
 - Benchmark against Firecrawl and Jina Reader (live network, ~14 Firecrawl credits per run): `FIRECRAWL_API_KEY=… cargo run --release --example bench`. Never write the key into the repo.
 - Run the server by hand: `./target/release/web-shooter`. It speaks JSON-RPC on stdin/stdout, so log only to stderr.
@@ -94,9 +94,9 @@ Dependencies:
 
 Ranking:
 - Fusion is a min-max-normalised weighted sum (BM25 weight 0.3, cut-off 0.7 of the top score), not RRF as first planned. RRF ranked as well in the eval, but its flat scores defeat the relative cut-off, so replies filled the budget.
-- The reranker is opt-in (`precise: true`), not on by default as first planned. On the eval it didn't beat embeddings at ranking (top 13/15 vs 14/15) and adds ~300 ms, though it cuts tokens by ~33%. Jina v1 turbo was faster but worse (top 8/15); BGE base was slower and worse. Its model (Jina v2 base) is ~1.1 GB.
+- The reranker is opt-in (`precise: true`) and compiled only with the `rerank` cargo feature, off by default (2026-10-24): ONNX Runtime made the binary 35 MB instead of 15 MB. Without the feature `precise` is left out of the schema, `rerank::Model` is an empty enum, and a client that still sends `precise` is ignored, not rejected. It was not on by default as first planned either. On the eval it didn't beat embeddings at ranking (top 13/15 vs 14/15) and adds ~300 ms, though it cuts tokens by ~33%. Jina v1 turbo was faster but worse (top 8/15); BGE base was slower and worse. Its model (Jina v2 base) is ~1.1 GB.
 - `rank::rank` multiplies scores by `shape_factor` in both modes: link lists (3+ links and under 100 letters/digits outside them) × 0.5, very short passages (≤ 6 words, usually navigation) × 0.5. A plain link-density penalty hurt the React case, whose answer sentence shares a chunk with video links.
-- The embedding model is `minishlab/potion-retrieval-32M` (override with `WEB_SHOOTER_EMBED_MODEL`). The first download took ~33 s; after that it loads in ~50 ms.
+- The embedding model is `minishlab/potion-base-8M` (override with `WEB_SHOOTER_EMBED_MODEL`), switched from `potion-retrieval-32M` on 2026-10-24 for size. Server memory when idle went from ~300 MB to ~90 MB. Eval found 24 vs 23, top 22 vs 23; held-out top 11 vs 10; about 6–9% more tokens. The ranking settings were tuned on the 32M model. `potion-base-4M` was worse at top (21/26), and BM25 alone gets 20/26.
 
 Extraction:
 - In `spider_transformations`, keep `clean_html` off because it empties Wikipedia and Next.js pages. Keep `readability` off because it drops headings. Noise is removed in `extract::tidy` instead.
@@ -108,7 +108,7 @@ Extraction:
 - `<pre>` text is taken from the HTML in the `lol_html` pass and put back after conversion (`extract::restore_code`), because the converter strips code indentation and doubles backslashes.
 
 PDFs:
-- `pdf_oxide` (pure Rust, MIT/Apache) parses; its own `to_markdown` is not used, because on Raft it bolded every word and on BERT it scrambled the title block. `pdf-extract` reads in the right order but gives no font data. `mupdf` (AGPL) and pdfium (native library per platform) were ruled out. It's built with `default-features = false` plus `legacy-crypto` (RC4 for older encrypted PDFs); it adds 4 MB to the release binary (45.9 → 49.8 MB).
+- `pdf_oxide` (pure Rust, MIT/Apache) parses; its own `to_markdown` is not used, because on Raft it bolded every word and on BERT it scrambled the title block. `pdf-extract` reads in the right order but gives no font data. `mupdf` (AGPL) and pdfium (native library per platform) were ruled out. It's built with `default-features = false` plus `legacy-crypto` (RC4 for older encrypted PDFs); it adds 4 MB to the release binary (45.9 → 49.8 MB, before the reranker became optional).
 - Boldness comes from the font name first (`Bold`, `Medi`… vs `Regu`, `Roman`…): Raft's fonts all report weight 700. A line is bold only if 95% of its letters are, so run-in labels ("**Masked LM** As-") aren't headings.
 - Heading level: from the section number (`3.2` → `###`), else the level that numbered headings of the same font style have (so "Abstract" and "References" sit beside "1 Introduction"), else the style's rank by size.
 - Hyphens at line ends are removed unless the stem already has one (`state-of-the-`), the next word does (`English-` + `to-German`), or the document writes the joined word with a hyphen elsewhere (`task-specific`).
@@ -138,7 +138,7 @@ Fetching and crawling:
 
 ## Release
 
-Dual MIT/Apache-2.0. `dist-workspace.toml` and `.github/workflows/release.yml` come from `cargo-dist`: pushing a `vX.Y.Z` tag builds binaries for Apple Silicon macOS, Linux x86_64/ARM64 and Windows x86_64 and publishes shell/PowerShell installers. There is no Intel Mac build because ONNX Runtime ships no prebuilt library for it. After editing the dist config, run `dist generate`. `cargo publish --dry-run` passes; the crate is not yet on crates.io.
+Dual MIT/Apache-2.0. `dist-workspace.toml` and `.github/workflows/release.yml` come from `cargo-dist`: pushing a `vX.Y.Z` tag builds binaries for Apple Silicon macOS, Linux x86_64/ARM64 and Windows x86_64 and publishes shell/PowerShell installers. There is no Intel Mac build because ONNX Runtime ships no prebuilt library for it; now that the reranker is optional, the default build no longer needs it, so an `x86_64-apple-darwin` target could be added. Binary size: `release` only strips (17.2 MB, ~13 s rebuild); `dist` adds thin LTO and one codegen unit (15.3 MB, ~75 s rebuild). After editing the dist config, run `dist generate`. `cargo publish --dry-run` passes; the crate is not yet on crates.io.
 
 ## Plan
 
