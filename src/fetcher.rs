@@ -7,7 +7,7 @@ use spider::{
     page::Page,
     reqwest::{
         Client,
-        header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue},
+        header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_LENGTH, HeaderMap, HeaderValue},
     },
     url::Url,
 };
@@ -34,12 +34,29 @@ pub fn build_client() -> anyhow::Result<Client> {
         .build()?)
 }
 
+/// Largest download read, the same as the PDF limit. A body without a
+/// declared size is cut off here.
+pub const MAX_BYTES: usize = crate::pdf::MAX_BYTES;
+
+/// Make spider stop downloads at `MAX_BYTES` (without it there is no limit).
+/// spider reads the limit from the environment on its first fetch.
+///
+/// # Safety
+/// Sets an environment variable, so no other thread may be running: call it
+/// at the start of `main`, before the async runtime starts.
+pub unsafe fn limit_download_size() {
+    // SAFETY: the caller guarantees the process is still single-threaded.
+    unsafe { std::env::set_var("SPIDER_MAX_SIZE_BYTES", MAX_BYTES.to_string()) };
+}
+
 /// A fetched page before extraction.
 pub struct Fetched {
     /// URL after redirects.
     pub url: String,
     pub status: u16,
     pub body: Vec<u8>,
+    /// The server declared a body larger than `MAX_BYTES`, so none was read.
+    pub too_large: bool,
 }
 
 /// Wait before retrying a server error.
@@ -51,7 +68,7 @@ const RETRY_DELAY: Duration = Duration::from_millis(500);
 pub async fn fetch(client: &Client, url: &str) -> Fetched {
     let url = normalize(url);
     let mut page = Page::new_page(&url, client).await;
-    if page.status_code.is_server_error() {
+    if page.status_code.is_server_error() && !too_large(&page) {
         tokio::time::sleep(RETRY_DELAY).await;
         page = Page::new_page(&url, client).await;
     }
@@ -62,8 +79,20 @@ pub async fn fetch(client: &Client, url: &str) -> Fetched {
     Fetched {
         url: final_url,
         status: page.status_code.as_u16(),
+        too_large: too_large(&page),
         body: page.get_html_bytes_u8().to_vec(),
     }
+}
+
+/// Whether spider skipped the body because the server declared it larger
+/// than `MAX_BYTES`. spider then reports the empty response as HTTP 504.
+fn too_large(page: &Page) -> bool {
+    let declared = page
+        .headers
+        .as_ref()
+        .and_then(|h| h.get(CONTENT_LENGTH))
+        .and_then(|v| v.to_str().ok()?.parse::<usize>().ok());
+    page.get_html_bytes_u8().is_empty() && declared.is_some_and(|n| n > MAX_BYTES)
 }
 
 /// The file a local path or `file://` URL names: `/abs/path`, `~/path`, or

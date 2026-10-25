@@ -17,6 +17,7 @@ async fn main() -> anyhow::Result<()> {
             url: url.clone(),
             status: 200,
             body: std::fs::read(path)?,
+            too_large: false,
         },
         None => fetcher::fetch(&client, &url).await,
     };

@@ -121,6 +121,7 @@ PDFs:
 
 Fetching and crawling:
 - The HTTP client sends browser `Accept`/`Accept-Language` headers (uber.com returned 406 without them) and an honest user agent, `web-shooter/<version>`. It retries a 5xx once after 500 ms.
+- Downloads stop at 25 MB (`fetcher::MAX_BYTES`, the PDF limit). spider has no limit unless `SPIDER_MAX_SIZE_BYTES` is set, and reads it once, so `main` sets it before starting the tokio runtime (`set_var` is unsafe once other threads run; that's why `main` doesn't use `#[tokio::main]`). A body declared larger is not downloaded, and spider reports the empty response as HTTP 504; `fetcher` detects that from `Content-Length` and skips the 5xx retry. A body with no declared size is cut off at the limit.
 - `fetch` and `links` do not check robots.txt: they read pages the client asked for by URL, like a browser. `crawl` checks robots.txt for every page it discovers (not the start page), using `spider::packages::robotparser::parser::RobotFileParser` with `fetcher::USER_AGENT`.
 - `crawl` limits: 4 concurrent fetches (its politeness control; there is no fixed delay), 30 s, `max_pages` (default 30, max 200), `max_depth` (default 3), same site unless `other_sites`. It stops early after 12 pages in a row that don't enter the top results.
 - `crawl` leaves "thin" pages (under 15% of their letters and digits outside links: indexes, link lists, Wikipedia's "What links here") out of the results but still follows their links. Duplicates are dropped by canonical URL, then by content hash.

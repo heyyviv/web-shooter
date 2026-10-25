@@ -98,6 +98,10 @@ pub async fn fetch_one(client: &Client, url: &str) -> PageOut {
         return read_local(path).await;
     }
     let fetched = fetcher::fetch(client, url).await;
+    if fetched.too_large {
+        let mb = fetcher::MAX_BYTES >> 20;
+        return PageOut::error(fetched.url, format!("larger than {mb} MB, not downloaded"));
+    }
     if !(200..300).contains(&fetched.status) {
         return PageOut::error(fetched.url, format!("HTTP {}", fetched.status));
     }

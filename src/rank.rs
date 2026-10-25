@@ -296,12 +296,15 @@ fn link_list_factor(text: &str, penalty: f32) -> f32 {
     }
 }
 
-/// Scale scores to 0..1 over the call; all zeros if they are all equal.
+/// Scale scores to 0..1 over the call. When they are all equal (one chunk,
+/// say) there is nothing to rank against: all 1 if they matched at all,
+/// else all 0. Zeros there made a one-chunk page return no passages.
 fn min_max(scores: &[f32]) -> Vec<f32> {
     let lo = scores.iter().copied().fold(f32::INFINITY, f32::min);
     let hi = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     if hi - lo <= f32::EPSILON {
-        return vec![0.0; scores.len()];
+        let flat = if hi > 0.0 { 1.0 } else { 0.0 };
+        return vec![flat; scores.len()];
     }
     scores.iter().map(|s| (s - lo) / (hi - lo)).collect()
 }
@@ -362,7 +365,25 @@ mod tests {
     #[test]
     fn min_max_scales_and_handles_flat_scores() {
         assert_eq!(min_max(&[2.0, 4.0, 3.0]), vec![0.0, 1.0, 0.5]);
-        assert_eq!(min_max(&[1.0, 1.0]), vec![0.0, 0.0]);
+        assert_eq!(min_max(&[1.0, 1.0]), vec![1.0, 1.0]);
+        assert_eq!(min_max(&[0.4]), vec![1.0]);
+        assert_eq!(min_max(&[0.0, 0.0]), vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn single_chunk_is_ranked_with_embeddings() {
+        let Some(model) = embed::load() else {
+            eprintln!("skipped: embedding model unavailable");
+            return;
+        };
+        let chunks = [c("", "Rust was first released in 2015 by Mozilla Research.")];
+        let scores = hybrid(
+            "when was rust released",
+            &chunks,
+            Some(&model),
+            RankConfig::default().fusion,
+        );
+        assert_eq!(scores, vec![1.0]);
     }
 
     #[test]
