@@ -41,7 +41,7 @@ Quality: the eval has 32 cases (12 of them PDFs), 4 from real use; 30 pass (top 
   3. **Chunk** at headings into ~200-token passages, each with its heading path.
   4. **Rank:** BM25 plus static embeddings (`model2vec`), fused by a normalised weighted sum, then down-weighting for link lists and navigation snippets. `precise: true` reranks the top 6 with a cross-encoder.
   5. **Pack** the best passages into the token budget, grouped by page, with a short section outline when part of a page was left out.
-- **No data is kept.** Pages exist only in memory during one tool call and nothing is written to disk, except Chrome's profile while `render`'s browser runs: a fresh temporary folder per start, deleted when Chrome closes (idle 2 minutes, the client disconnecting, SIGTERM/SIGINT/SIGHUP). A server killed with SIGKILL leaves it behind; the next Chrome start deletes profiles of processes that no longer exist. Between calls the server holds only the HTTP connection pool and the models. The user asked about this; keep it true unless they agree to the SQLite cache (M5), which would need expiry, a size cap and an off switch.
+- **No data is kept.** Pages exist only in memory during one tool call and nothing is written to disk, except Chrome's profile while `render`'s browser runs: a fresh temporary folder per start, deleted when Chrome closes (idle 2 minutes, the client disconnecting, SIGTERM/SIGINT/SIGHUP). A server killed with SIGKILL leaves it behind; the next Chrome start deletes profiles of processes that no longer exist. Between calls the server holds only the HTTP connection pool and the models. The user asked about this; keep it true. No cache (2026-10-31, the user's call): web-shooter runs locally for one person, who rarely opens the same link twice.
 - **Output format** (compact markdown, not JSON):
   - `fetch` with a query: one `[n] url · title` line per page, then `§ Heading > Path · score` before each passage.
   - `crawl`: `[n] url · title · score`, then an indented one-line snippet.
@@ -179,7 +179,7 @@ Dual MIT/Apache-2.0. `dist-workspace.toml` and `.github/workflows/release.yml` c
 | M7 | Benchmark against Firecrawl and Jina, real-use fixes, held-out cases | in progress: single-page benchmark and real-use fixes done; held-out cases and the crawl comparison remain (the crawl comparison costs Firecrawl credits, so ask first) |
 | M8 | PDF support (research papers) | done (2026-10-23): inside `fetch`, URLs and local paths, pure Rust |
 | v2 | Headless Chrome for JavaScript pages | done (2026-10-31) as a separate `render` tool, at the user's request, rather than an automatic fallback inside `fetch` |
-| M5 | SQLite cache with ETag | planned last; needs expiry, size cap and an off switch (see "No data is kept") |
+| M5 | SQLite cache with ETag | dropped (2026-10-31): one local user rarely reopens a link, and a cache would break "No data is kept" |
 
 Keep adding the user's real queries to `eval/cases.json`. `eval/heldout.json` holds cases that must never be used for tuning, so there is an honest held-out number; grow it, don't tune on it.
 
