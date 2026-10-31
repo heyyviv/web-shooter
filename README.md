@@ -142,14 +142,16 @@ Scanned PDFs (images with no text layer) need OCR, which web-shooter doesn't do;
 
 ## Benchmark
 
-Single run, live network ([`examples/bench.rs`](examples/bench.rs)), on the 15 questions the ranking was tuned on:
+Single run, live network, 2026-10-31 ([`examples/bench.rs`](examples/bench.rs)), on the 32 eval questions (web pages, JSON APIs and 12 PDFs):
 
 | Tool | Median latency | Avg tokens returned | Answer present |
 | --- | --- | --- | --- |
-| web-shooter `fetch` with a query | 405 ms | 1,138 | 14/15 |
-| Jina Reader | 625 ms | 15,692 | 15/15 |
-| Firecrawl, cache allowed | 1,214 ms | 16,513 | 15/15 |
-| Firecrawl, fresh fetch | 3,341 ms | 16,523 | 15/15 |
+| web-shooter `fetch` with a query | **793 ms** | **1,081** | 29/32 |
+| Firecrawl, cache allowed | 1,207 ms (1.5× slower) | 25,409 | 28/32 |
+| Firecrawl, fresh fetch | 1,548 ms (2× slower) | 25,025 | 28/32 |
+| Jina Reader | 2,046 ms (2.6× slower) | 25,345 | 24/32 |
+
+Six PDF questions check tables and exponents in web-shooter's markdown format (`| No NSP | 83.9 |`, `10^−9`), which favours it: Firecrawl also writes PDF tables as markdown and passed 4 of them, Jina none. On long PDFs (IRS, NIST) cached Firecrawl is faster, since web-shooter downloads the whole file on every call. The first run (2026-10-11, 15 questions) had web-shooter at 405 ms, Jina 625 ms and Firecrawl 1,214 ms (3,341 ms fresh).
 
 ### Held-out check
 
