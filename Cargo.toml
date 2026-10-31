@@ -26,7 +26,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 spider = { version = "2.53.9", default-features = false, features = ["encoding", "reqwest_rustls_tls", "sync"] }
 spider_transformations = "2.39.13"
-tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "io-std"] }
+tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "io-std", "signal"] }
+chromiumoxide = { version = "0.9.1", default-features = false }
 
 [features]
 # The cross-encoder behind `fetch`'s `precise` option. Off by default: it adds

@@ -7,12 +7,14 @@ use rmcp::{
 use spider::reqwest::Client;
 
 use crate::{
+    browser::Chrome,
     fetcher,
     models::ModelSet,
     tools::{
         crawl::{self, CrawlParams},
         fetch::{self, FetchParams},
         links::{self, LinksParams},
+        render::{self, RenderParams},
     },
 };
 
@@ -20,7 +22,9 @@ const INSTRUCTIONS: &str = "Fast web reader and focused crawler. `fetch` reads p
 you already have URLs or local paths for (pass a query to get only the relevant passages, \
 and batch URLs). \
 `links` lists a page's links ranked by a query. `crawl` explores a site from a start page \
-and returns the most relevant pages as URLs with snippets; then `fetch` the ones you need.";
+and returns the most relevant pages as URLs with snippets; then `fetch` the ones you need. \
+`render` reads pages that build their content with JavaScript, in headless Chrome: use it when \
+`fetch` reports no readable content, since it is slower.";
 
 #[derive(Clone)]
 pub struct WebShooter {
@@ -28,6 +32,7 @@ pub struct WebShooter {
     tool_router: ToolRouter<Self>,
     client: Client,
     models: ModelSet,
+    chrome: Chrome,
 }
 
 #[tool_router]
@@ -37,7 +42,13 @@ impl WebShooter {
             tool_router: Self::tool_router(),
             client: fetcher::build_client()?,
             models: ModelSet::default(),
+            chrome: Chrome::default(),
         })
+    }
+
+    /// Close Chrome, if `render` started it, and delete its profile.
+    pub async fn shutdown(&self) {
+        self.chrome.close().await;
     }
 
     /// Start loading ranking models in the background.
@@ -53,6 +64,17 @@ impl WebShooter {
         Parameters(params): Parameters<FetchParams>,
     ) -> Result<CallToolResult, McpError> {
         let text = fetch::run(&self.client, &self.models, params).await;
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Read pages that build their content with JavaScript (single-page apps, job boards, search results) by loading them in headless Chrome, then return clean markdown like `fetch`. With `query`, returns only the most relevant passages within `max_tokens`. Slower than `fetch` (about 1-3 s a page): use it when `fetch` reports no readable content. Needs Chrome installed."
+    )]
+    async fn render(
+        &self,
+        Parameters(params): Parameters<RenderParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let text = render::run(&self.chrome, &self.models, params).await;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 

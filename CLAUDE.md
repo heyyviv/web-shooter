@@ -12,10 +12,11 @@ Requirements stated by the user:
 
 ## Status
 
-Three MCP tools work and are in real use. The server is registered at user scope (`claude mcp add --scope user web-shooter`) and the user has used it for a job search:
+Four MCP tools; the first three are in real use. The server is registered at user scope (`claude mcp add --scope user web-shooter`) and the user has used it for a job search:
 - `fetch(urls[], query?, keywords?, max_tokens?, precise?)` downloads pages concurrently and converts them to markdown. Without a query it fits whole pages to the token budget (default 2,000). With `query`/`keywords` it returns ranked passages. `precise: true` adds a cross-encoder reranker, only in builds with the `rerank` cargo feature (off by default). It also reads PDFs (from a URL or a local path; passages are labelled `p.N`), JSON API responses and the data embedded in JavaScript-shell pages.
 - `links(url, query?, keywords?, max_links?)` lists a page's links, ranked by the query if given.
 - `crawl(url, query, keywords?, max_pages?, max_depth?, other_sites?, max_results?)` does a best-first crawl from a start page and returns the most relevant pages as URLs with one-line snippets.
+- `render(urls, query?, keywords?, max_tokens?)` (added 2026-10-31) loads pages in headless Chrome, then answers like `fetch`. For pages that build their content with JavaScript; `fetch`'s "no readable content" error points to it.
 
 Quality: the eval has 32 cases (12 of them PDFs), 4 from real use; 30 pass (top 24) with `potion-base-8M` (`cargo run --release --example eval`), including all 12 PDF cases. Six PDF cases (added 2026-10-31) expect a markdown table row or an exponent (`10^−9`), so they pass only when the structure is right; 4 of them miss on top because prose about the same result outranks the table. The two failures are a location query on a Google Careers posting and "who designed Rust and when" on Wikipedia (the page says "created"; it passes with the keyword `Graydon Hoare`). Benchmark results are below.
 
@@ -40,7 +41,7 @@ Quality: the eval has 32 cases (12 of them PDFs), 4 from real use; 30 pass (top 
   3. **Chunk** at headings into ~200-token passages, each with its heading path.
   4. **Rank:** BM25 plus static embeddings (`model2vec`), fused by a normalised weighted sum, then down-weighting for link lists and navigation snippets. `precise: true` reranks the top 6 with a cross-encoder.
   5. **Pack** the best passages into the token budget, grouped by page, with a short section outline when part of a page was left out.
-- **No data is kept.** Pages exist only in memory during one tool call and nothing is written to disk. Between calls the server holds only the HTTP connection pool and the models. The user asked about this; keep it true unless they agree to the SQLite cache (M5), which would need expiry, a size cap and an off switch.
+- **No data is kept.** Pages exist only in memory during one tool call and nothing is written to disk, except Chrome's profile while `render`'s browser runs: a fresh temporary folder per start, deleted when Chrome closes (idle 2 minutes, the client disconnecting, SIGTERM/SIGINT/SIGHUP). A server killed with SIGKILL leaves it behind; the next Chrome start deletes profiles of processes that no longer exist. Between calls the server holds only the HTTP connection pool and the models. The user asked about this; keep it true unless they agree to the SQLite cache (M5), which would need expiry, a size cap and an off switch.
 - **Output format** (compact markdown, not JSON):
   - `fetch` with a query: one `[n] url · title` line per page, then `§ Heading > Path · score` before each passage.
   - `crawl`: `[n] url · title · score`, then an indented one-line snippet.
@@ -54,6 +55,8 @@ The crate is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so exa
 - `src/server.rs`: `WebShooter`, the MCP handler. It holds the shared HTTP client and the `ModelSet`. Every tool is registered in its `#[tool_router]` impl, which delegates to `src/tools/`; the tool descriptions and server instructions there are what the client LLM reads.
 - `src/tools/<name>.rs`: each tool's parameter struct (doc comments become the JSON schema the LLM sees, so keep them short) and its `run` function. `tools::query_text` joins query and keywords the same way for all tools.
 - `src/tools/crawl.rs`: `BinaryHeap` frontier. A link's priority is 0.7 × its own text score + 0.3 × the relevance of the page it was found on, both from `rank::absolute`.
+- `src/browser.rs`: `Chrome`, the headless browser behind `render`: started on first use, closed after 2 idle minutes, at most 4 tabs across all calls (a semaphore; a cancelled call's permit and tab are released by drop guards). A dead Chrome is restarted, at most 3 tries per page; a page that fails to load isn't retried. Images are off and caches minimal. After the load event it polls the visible text length every 300 ms until it is unchanged 5 times in a row (10 s cap, 3 s if blank, 40 s per page in all), because job sites fetch results after loading (Oracle HCM pauses over half a second first). Only http(s) URLs reach it: `render` refuses local paths and `file://`.
+- `src/tools/render.rs`: renders up to 4 pages at once, runs `extract` on the live DOM's HTML, then `fetch::answer` (the ranking and packing `fetch` uses). A bot-check page (Cloudflare "Just a moment...") is reported as blocked, not returned as content.
 - `src/fetcher.rs`: the HTTP client (`spider::reqwest`) and single-page fetch with one retry on 5xx.
 - `src/extract.rs`: response → markdown. One `lol_html` pass collects the title, canonical URL, links (with anchor text and heading), and inline scripts; it also drops MathML and icon glyphs. Then `spider_transformations` converts the main content and `tidy` removes noise.
 - `src/pdf.rs`: PDF → markdown. `pdf_oxide` gives positioned text spans; web-shooter builds lines (a row split at wide gaps), drops running headers/footers (repeated lines among the 3 highest and 3 lowest on a page, digits ignored), orders two-column pages (`find_gutter`, then split lines merged across the gap), recovers headings (`Style`) and joins paragraphs. It writes a `[p.N]` line before each page's first paragraph; `chunk` turns those into `Chunk::pdf_page`, and `pack` prints `· p.N`. The title goes to the page header, not the markdown.
@@ -128,6 +131,12 @@ Fetching and crawling:
 - `crawl` limits: 4 concurrent fetches (its politeness control; there is no fixed delay), 30 s, `max_pages` (default 30, max 200), `max_depth` (default 3), same site unless `other_sites`. It stops early after 12 pages in a row that don't enter the top results.
 - `crawl` leaves "thin" pages (under 15% of their letters and digits outside links: indexes, link lists, Wikipedia's "What links here") out of the results but still follows their links. Duplicates are dropped by canonical URL, then by content hash.
 
+Headless Chrome (`render`, 2026-10-31):
+- Driven with `chromiumoxide` 0.9 (DevTools protocol), not `spider`'s `chrome` feature: that feature changes spider's own page fetching, which `fetch` relies on. It added 5.4 MB to the release binary (17.3 → 22.7 MB). Chrome is found by `chromiumoxide`'s detection (`CHROME`, install locations, PATH) or `WEB_SHOOTER_CHROME`.
+- chromiumoxide's handler doesn't end when Chrome dies: it yields one connection error and then stays pending, and a tab being opened waits forever. The handler loop stops at the first error, which drops the handler and fails the waiting requests. `main` ends with `shutdown_background`, because after a signal the runtime would otherwise wait forever on the thread reading stdin.
+- Timings on this Mac: first start 0.3–4.8 s (cold start), then 1.3–3 s a page, 7.6 s for Stanford's Oracle HCM search.
+- Tested on the job-search failures: Stanford (Oracle HCM) search results now come through; Amazon's search page renders its job list (but a vague query ranks filter lists above it); Uber is a Cloudflare check and is reported as blocked. Waiting for bot checks to pass was considered and not done: getting past bot protection is the user's decision, not a default.
+
 ## What real use showed (job search, 2026-10-11)
 
 - **Works:** single postings in plain HTML (Amazon, Google), Zoho Recruit pages (embedded `JSON.parse` data), and JSON APIs such as Amazon's `search.json`.
@@ -155,7 +164,7 @@ Dual MIT/Apache-2.0. `dist-workspace.toml` and `.github/workflows/release.yml` c
 | M6 | `links` and `crawl` with the scored frontier and early stop | done |
 | M7 | Benchmark against Firecrawl and Jina, real-use fixes, held-out cases | in progress: single-page benchmark and real-use fixes done; held-out cases and the crawl comparison remain (the crawl comparison costs Firecrawl credits, so ask first) |
 | M8 | PDF support (research papers) | done (2026-10-23): inside `fetch`, URLs and local paths, pure Rust |
-| v2 | Headless Chrome fallback, only when plain HTTP returns an empty shell | proposed next, because 4 of the user's failing sites need it; not yet agreed |
+| v2 | Headless Chrome for JavaScript pages | done (2026-10-31) as a separate `render` tool, at the user's request, rather than an automatic fallback inside `fetch` |
 | M5 | SQLite cache with ETag | planned last; needs expiry, size cap and an off switch (see "No data is kept") |
 
 Keep adding the user's real queries to `eval/cases.json`. `eval/heldout.json` holds cases that must never be used for tuning, so there is an honest held-out number; grow it, don't tune on it.

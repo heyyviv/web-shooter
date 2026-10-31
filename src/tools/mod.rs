@@ -1,6 +1,7 @@
 pub mod crawl;
 pub mod fetch;
 pub mod links;
+pub mod render;
 
 /// The text ranked against: the query plus any keywords, or empty if neither.
 pub fn query_text(query: Option<&str>, keywords: Option<&[String]>) -> String {

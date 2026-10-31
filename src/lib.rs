@@ -1,3 +1,4 @@
+pub mod browser;
 pub mod chunk;
 pub mod data;
 pub mod embed;

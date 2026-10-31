@@ -109,7 +109,8 @@ pub fn local_path(url: &str) -> Option<PathBuf> {
     (url.starts_with('/') || path.is_absolute()).then(|| path.to_path_buf())
 }
 
-fn normalize(url: &str) -> String {
+/// `url` as an http(s) URL: bare domains like `example.com` get `https://`.
+pub fn normalize(url: &str) -> String {
     let url = url.trim();
     if url.starts_with("http://") || url.starts_with("https://") {
         url.to_string()

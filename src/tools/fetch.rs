@@ -41,6 +41,11 @@ pub async fn run(client: &Client, models: &ModelSet, params: FetchParams) -> Str
         .buffered(CONCURRENCY)
         .collect()
         .await;
+    answer(pages, params, models).await
+}
+
+/// Rank and pack already-read pages into the tool's reply (`fetch` and `render`).
+pub async fn answer(pages: Vec<PageOut>, params: FetchParams, models: &ModelSet) -> String {
     #[cfg(feature = "rerank")]
     let precise = params.precise.unwrap_or(false);
     #[cfg(not(feature = "rerank"))]
@@ -148,7 +153,10 @@ pub fn page_out(url: String, extracted: Option<crate::extract::Extracted>) -> Pa
             canonical: e.canonical,
         },
         Some(e) if e.error.is_some() => PageOut::error(url, e.error.unwrap_or_default()),
-        Some(_) => PageOut::error(url, "no readable content (the page may need JavaScript)"),
+        Some(_) => PageOut::error(
+            url,
+            "no readable content (the page may need JavaScript: try `render`)",
+        ),
         None => PageOut::error(url, "extraction failed"),
     }
 }

@@ -31,6 +31,7 @@ work through the examples that illustrate them:
 | `fetch(urls, query?, keywords?, max_tokens?)` | You have URLs and want their content | With a query: the best passages, grouped by page. Without: whole pages trimmed to `max_tokens` (default 2,000) |
 | `links(url, query?, keywords?, max_links?)` | You want to choose which page to read next | The page's links, ranked by the query if given |
 | `crawl(url, query, keywords?, max_pages?, max_depth?, other_sites?, max_results?)` | You have a start page and a goal, not the URLs | The most relevant pages found, as URLs with a one-line snippet each |
+| `render(urls, query?, keywords?, max_tokens?)` | `fetch` reports no readable content: the page builds itself with JavaScript | Like `fetch`, after loading the pages in headless Chrome (about 1–8 s a page) |
 
 `fetch` also reads PDFs, from a URL or a local path (`/path/paper.pdf`, `~/…`, `file://…`): headings are recovered from font sizes and section numbers, two-column papers are read column by column, running headers and footers are dropped, and each passage is labelled with its page (`§ 5.3 Log replication · p.7`). It reads JSON API responses (one section per record) and the data embedded in JavaScript-rendered pages too. `crawl` respects robots.txt, stays on the start site by default, fetches 4 pages at a time and stops after 30 pages or 30 seconds by default.
 
@@ -131,10 +132,11 @@ Tips:
 | `WEB_SHOOTER_EMBED_MODEL` | A different model2vec embedding model (Hugging Face repo id or local folder) |
 | `WEB_SHOOTER_RERANK_MODEL` | A different reranker for `precise` (only with `--features rerank`): `bge-base`, `bge-m3` or `jina-turbo` |
 | `HF_HOME` | Where models are cached (default `~/.cache/huggingface`) |
+| `WEB_SHOOTER_CHROME` | The Chrome or Chromium executable `render` uses (default: found in the usual install locations) |
 
 ## What it can't read yet
 
-web-shooter does not run JavaScript. Pages that load their content from a separate API after the page arrives come back empty: Oracle HCM career sites, many search-results pages, and sites behind bot checks such as Cloudflare. If you know the site's JSON API URL, pass that to `fetch`; otherwise use a browser tool. A headless-Chrome fallback is planned.
+`fetch` does not run JavaScript, so pages that load their content from a separate API after the page arrives come back empty (Oracle HCM career sites, many search-results pages); `render` reads those in headless Chrome. It needs Chrome (or Chromium, Edge, Brave) installed; nothing is downloaded. Chrome starts on the first `render` call, runs with a fresh temporary profile that is deleted when it closes, and closes after 2 idle minutes. Sites behind bot checks such as Cloudflare are reported as blocked: web-shooter doesn't get past them.
 
 Scanned PDFs (images with no text layer) need OCR, which web-shooter doesn't do; `fetch` says so. Tables in PDFs come out as markdown tables (complex ones imperfectly); equations come out as plain text in reading order.
 
