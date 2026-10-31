@@ -87,6 +87,20 @@ Caveats:
 - `crawl` hasn't been compared yet.
 - The Firecrawl free plan allows about 10 requests a minute, so `bench` spaces its requests 6.5 s apart.
 
+Second run (2026-10-31) on all 32 eval cases (17 distinct URLs, about 34 Firecrawl credits), single run, live network:
+
+| Tool | Median latency | Avg tokens | Answer present |
+|---|---|---|---|
+| web-shooter `fetch` + query | 793 ms | 1,081 | 29/32 |
+| Firecrawl (cache allowed) | 1,207 ms | 25,409 | 28/32 |
+| Firecrawl fresh (`maxAge: 0`) | 1,548 ms | 25,025 | 28/32 |
+| Jina Reader | 2,046 ms | 25,345 | 24/32 (2 failed) |
+
+- The six table/exponent PDF cases expect web-shooter's markdown. Firecrawl also writes PDF tables as markdown tables and passed 4 of them; it missed the two exponent cases (it writes `10−9`). Jina passed none.
+- The two Google Careers postings are gone live (every tool misses them), but their snapshots keep them valid in the eval, so they stay.
+- web-shooter is slower than cached Firecrawl on long PDFs (IRS, NIST CSF: 2–3 s vs under 1 s): it downloads the whole PDF on every call.
+- Its other miss is "who designed Rust" (the page says "created"); Firecrawl and Jina return the whole page, so it's in there.
+
 ## Decisions and gotchas
 
 Dependencies:
