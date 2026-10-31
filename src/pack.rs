@@ -105,10 +105,10 @@ const TRUNCATION_NOTE: &str =
 /// Section names listed per page, so the caller can ask for a different one.
 const OUTLINE_MAX: usize = 8;
 
-/// Pack the best-scoring chunks into `max_tokens`, grouped by page.
-/// Passages scoring below `min_relative` × the best score are left out.
-///
-/// Pages appear in order of their best passage; passages within a page are
+/// Passages merged for output: heading path, PDF page, best relative score,
+/// text, and table caption.
+type Group = (String, Option<u32>, f32, String, Option<String>);
+
 /// Longest caption shown in a passage header, in characters.
 const CAPTION_MAX: usize = 100;
 
@@ -132,6 +132,10 @@ fn table_label(table: &Option<String>, text: &str) -> String {
     }
 }
 
+/// Pack the best-scoring chunks into `max_tokens`, grouped by page.
+/// Passages scoring below `min_relative` × the best score are left out.
+///
+/// Pages appear in order of their best passage; passages within a page are
 /// in document order, with neighbours under the same headings merged.
 pub fn pack_passages(
     pages: &[PageOut],
@@ -205,7 +209,7 @@ pub fn pack_passages(
         picked.sort_by_key(|&i| chunks[i].index);
 
         // Merge runs of neighbouring chunks under the same headings.
-        let mut groups: Vec<(String, Option<u32>, f32, String, Option<String>)> = Vec::new();
+        let mut groups: Vec<Group> = Vec::new();
         let mut prev: Option<&Chunk> = None;
         for &i in picked.iter() {
             let c = &chunks[i];

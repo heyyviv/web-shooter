@@ -117,7 +117,7 @@ pub async fn run(client: &Client, models: &ModelSet, params: CrawlParams) -> Str
         .unwrap_or(DEFAULT_MAX_PAGES)
         .clamp(1, MAX_PAGES_LIMIT);
     let max_depth = params.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
-    let max_results = params.max_results.unwrap_or(DEFAULT_MAX_RESULTS);
+    let max_results = params.max_results.unwrap_or(DEFAULT_MAX_RESULTS).max(1);
     let other_sites = params.other_sites.unwrap_or(false);
 
     let start = if params.url.contains("://") {
@@ -155,7 +155,7 @@ pub async fn run(client: &Client, models: &ModelSet, params: CrawlParams) -> Str
             let Some(next) = frontier.pop() else { break };
             // The start page was asked for explicitly, like `fetch`; robots.txt
             // governs the pages the crawl discovers on its own.
-            if next.depth > 0 && !allowed(client, &mut robots, &next.url).await {
+            if next.depth > 0 && !allowed(client, &mut robots, &next.url, started).await {
                 stats.robots_blocked += 1;
                 continue;
             }
@@ -189,7 +189,9 @@ pub async fn run(client: &Client, models: &ModelSet, params: CrawlParams) -> Str
             continue;
         }
 
-        let relevance = page_relevance(&query, &page, embedder);
+        // Chunking and embedding are CPU work; let other tasks use this thread.
+        let relevance =
+            tokio::task::block_in_place(|| page_relevance(&query, &page, embedder));
         if enters_top(&mut top, relevance, max_results) {
             since_better = 0;
         } else {
@@ -204,7 +206,7 @@ pub async fn run(client: &Client, models: &ModelSet, params: CrawlParams) -> Str
                 .filter(|l| !seen.contains(&l.url))
                 .collect();
             let texts: Vec<String> = new.iter().map(|l| l.scoring_text()).collect();
-            let scores = rank::absolute(&query, &texts, embedder);
+            let scores = tokio::task::block_in_place(|| rank::absolute(&query, &texts, embedder));
             for (link, score) in new.into_iter().zip(scores) {
                 seen.insert(link.url.clone());
                 frontier.push(Candidate {
@@ -244,15 +246,20 @@ pub async fn run(client: &Client, models: &ModelSet, params: CrawlParams) -> Str
         out.push_str(&format!(" ({})", notes.join(", ")));
     }
     out.push_str(&format!(" · stopped: {stop}\n"));
-    out.push_str(&results(&query, &pages, embedder, max_results));
+    out.push_str(&tokio::task::block_in_place(|| {
+        results(&query, &pages, embedder, max_results)
+    }));
     out.trim_end().to_string()
 }
 
-/// Check robots.txt for the URL's origin, reading it on first use.
+/// Check robots.txt for the URL's origin, reading it on first use. The read
+/// counts toward the crawl's time limit; a robots.txt not read in time
+/// blocks the URL.
 async fn allowed(
     client: &Client,
     robots: &mut HashMap<String, Box<RobotFileParser>>,
     url: &str,
+    started: Instant,
 ) -> bool {
     let Ok(parsed) = Url::parse(url) else {
         return false;
@@ -260,7 +267,13 @@ async fn allowed(
     let origin = format!("{}/", parsed.origin().ascii_serialization());
     if !robots.contains_key(&origin) {
         let mut parser = RobotFileParser::new();
-        parser.read(client, &origin).await;
+        let remaining = TIME_LIMIT.saturating_sub(started.elapsed());
+        if tokio::time::timeout(remaining, parser.read(client, &origin))
+            .await
+            .is_err()
+        {
+            return false;
+        }
         robots.insert(origin.clone(), parser);
     }
     robots[&origin].can_fetch(crate::fetcher::USER_AGENT, url)

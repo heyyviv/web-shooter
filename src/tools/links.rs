@@ -44,7 +44,10 @@ pub async fn run(client: &Client, models: &ModelSet, params: LinksParams) -> Str
     } else {
         models.wait(false).await;
         let texts: Vec<String> = page.links.iter().map(Link::scoring_text).collect();
-        let scores = rank::absolute(&query, &texts, models.ready(false).embedder);
+        // Embedding is CPU work; let other tasks use this thread.
+        let scores = tokio::task::block_in_place(|| {
+            rank::absolute(&query, &texts, models.ready(false).embedder)
+        });
         let mut scored: Vec<(Option<f32>, &Link)> =
             scores.into_iter().map(Some).zip(&page.links).collect();
         scored.sort_by(|a, b| b.0.unwrap_or(0.0).total_cmp(&a.0.unwrap_or(0.0)));
