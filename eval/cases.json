@@ -264,5 +264,68 @@
     "expect": [
       "GOVERN"
     ]
+  },
+  {
+    "name": "pdf-attention-cost",
+    "urls": [
+      "https://arxiv.org/pdf/1706.03762"
+    ],
+    "query": "training cost in FLOPs of the big Transformer on English-German",
+    "expect": [
+      "| Transformer (big) | 28.4 | 41.8 | 2.3 · 10^19 |"
+    ]
+  },
+  {
+    "name": "pdf-attention-epsilon",
+    "urls": [
+      "https://arxiv.org/pdf/1706.03762"
+    ],
+    "query": "Adam epsilon value used for training",
+    "expect": [
+      "ϵ = 10^−9"
+    ]
+  },
+  {
+    "name": "pdf-bert-no-nsp",
+    "urls": [
+      "https://arxiv.org/pdf/1810.04805"
+    ],
+    "query": "MRPC accuracy without next sentence prediction",
+    "keywords": [
+      "No NSP"
+    ],
+    "expect": [
+      "| No NSP | 83.9 | 84.9 | 86.5 | 92.6 | 87.9 |"
+    ]
+  },
+  {
+    "name": "pdf-resnet-voc",
+    "urls": [
+      "https://arxiv.org/pdf/1512.03385"
+    ],
+    "query": "ResNet-101 mAP on PASCAL VOC 2007 test",
+    "expect": [
+      "| ResNet-101 | 76.4 | 73.8 |"
+    ]
+  },
+  {
+    "name": "pdf-irs-wage-base",
+    "urls": [
+      "https://www.irs.gov/pub/irs-pdf/p15.pdf"
+    ],
+    "query": "social security wage base limit for 2025",
+    "expect": [
+      "| 2025—social security | $176,100 | 12.4% |"
+    ]
+  },
+  {
+    "name": "pdf-csf-identifier",
+    "urls": [
+      "https://nvlpubs.nist.gov/nistpubs/CSWP/NIST.CSWP.29.pdf"
+    ],
+    "query": "category identifier of Risk Management Strategy",
+    "expect": [
+      "| Risk Management Strategy | GV.RM |"
+    ]
   }
 ]

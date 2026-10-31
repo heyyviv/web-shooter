@@ -129,5 +129,25 @@
     "expect": [
       "8 characters"
     ]
+  },
+  {
+    "name": "pdf-adam-epsilon",
+    "urls": [
+      "https://arxiv.org/pdf/1412.6980"
+    ],
+    "query": "default value of epsilon",
+    "expect": [
+      "10^−8"
+    ]
+  },
+  {
+    "name": "pdf-llama2-lr",
+    "urls": [
+      "https://arxiv.org/pdf/2307.09288"
+    ],
+    "query": "peak learning rate used to pretrain the 70B model",
+    "expect": [
+      "10^−4"
+    ]
   }
 ]

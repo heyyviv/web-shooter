@@ -48,6 +48,10 @@ fn is_back_matter(heading: &str) -> bool {
     SKIP_SECTIONS.contains(&h)
 }
 
+/// A table caption line: `Table 2: …`, `TABLE 3. …`.
+static TABLE_CAPTION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:Table|TABLE)\s+[0-9A-Z]+(?:\.[0-9]+)?[.:]?\s").unwrap());
+
 /// A markdown link; the URL may contain one level of parentheses, as in
 /// `https://en.wikipedia.org/wiki/Search_engine_(computing)`.
 pub static MD_LINK: LazyLock<Regex> =
@@ -73,6 +77,13 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
     // The PDF page of the current line, and of the first line in `buf`.
     let mut pdf_page: Option<u32> = None;
     let mut start_page: Option<u32> = None;
+    // The header and separator of the markdown table being read, repeated at
+    // the start of a chunk that begins inside it so its rows keep their labels.
+    let mut table_header: Option<String> = None;
+    let mut prev_line = "";
+    let mut repeat_header = false;
+    // The last line with text, so a caption followed by a blank line still counts.
+    let mut last_text = "";
 
     let flush = |buf: &mut String,
                  headings: &[(usize, String)],
@@ -121,14 +132,34 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
             headings.push((level, text));
             continue;
         }
+        if !in_code {
+            if line.starts_with("| ---") && prev_line.starts_with('|') {
+                table_header = Some(format!("{prev_line}\n{line}\n"));
+            } else if !line.starts_with('|') {
+                table_header = None;
+            }
+        }
         if buf.trim().is_empty() {
             start_page = pdf_page;
         }
+        if std::mem::take(&mut repeat_header)
+            && let Some(header) = &table_header
+        {
+            buf.push_str(header);
+        }
         buf.push_str(line);
         buf.push('\n');
-        // Code blocks are kept whole unless they get very long.
-        if buf.len() >= TARGET_BYTES && (!in_code || buf.len() >= TARGET_BYTES * 3) {
+        prev_line = line;
+        // Code blocks are kept whole unless they get very long, and a table
+        // caption stays with the table after it: its words say what the
+        // numbers are.
+        if !line.trim().is_empty() {
+            last_text = line;
+        }
+        let caption = !in_code && TABLE_CAPTION.is_match(last_text) && buf.len() < TARGET_BYTES * 2;
+        if buf.len() >= TARGET_BYTES && (!in_code || buf.len() >= TARGET_BYTES * 3) && !caption {
             flush(&mut buf, &headings, start_page, &mut chunks);
+            repeat_header = table_header.is_some();
         }
     }
     flush(&mut buf, &headings, start_page, &mut chunks);
@@ -169,6 +200,43 @@ fn heading(line: &str) -> Option<(usize, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_table_caption_stays_with_its_table() {
+        let mut md = "## Results\n\n".to_string();
+        md.push_str(&"Some running text about the experiments. ".repeat(18));
+        md.push_str("\n\nTable 2: BLEU scores and training cost.\n\n| Model | BLEU |\n| --- | --- |\n| Big | 28.4 |\n");
+        let chunks = chunk(0, &md);
+        let with_table = chunks.iter().find(|c| c.text.contains("| Big |")).unwrap();
+        assert!(with_table.text.contains("Table 2: BLEU"), "{chunks:#?}");
+    }
+
+    #[test]
+    fn a_table_split_across_chunks_repeats_its_header() {
+        let mut md = String::from("## Results\n\n| Model | BLEU |\n| --- | --- |\n");
+        for i in 0..80 {
+            md.push_str(&format!("| model number {i:02} | {i}.5 |\n"));
+        }
+        md.push_str("\nAfter the table.\n");
+        let chunks = chunk(0, &md);
+        assert!(chunks.len() > 2);
+        for c in &chunks[1..] {
+            if c.text.contains("| model number") {
+                assert!(
+                    c.text.starts_with("| Model | BLEU |\n| --- | --- |\n"),
+                    "{}",
+                    c.text
+                );
+            }
+        }
+        // No header is left hanging over text that isn't part of the table.
+        assert!(
+            chunks
+                .iter()
+                .all(|c| !c.text.contains("| --- | --- |\n\nAfter"))
+        );
+        assert!(chunks.iter().any(|c| c.text.contains("After the table.")));
+    }
 
     #[test]
     fn prose_share_ignores_link_text_and_urls() {

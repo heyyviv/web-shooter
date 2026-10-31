@@ -136,7 +136,7 @@ Tips:
 
 web-shooter does not run JavaScript. Pages that load their content from a separate API after the page arrives come back empty: Oracle HCM career sites, many search-results pages, and sites behind bot checks such as Cloudflare. If you know the site's JSON API URL, pass that to `fetch`; otherwise use a browser tool. A headless-Chrome fallback is planned.
 
-Scanned PDFs (images with no text layer) need OCR, which web-shooter doesn't do; `fetch` says so. Complex tables and equations in PDFs come out as plain text in reading order.
+Scanned PDFs (images with no text layer) need OCR, which web-shooter doesn't do; `fetch` says so. Tables in PDFs come out as markdown tables (complex ones imperfectly); equations come out as plain text in reading order.
 
 ## Benchmark
 
