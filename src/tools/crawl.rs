@@ -425,6 +425,7 @@ mod tests {
                 "word ".repeat(100)
             ),
             pdf_page: None,
+            table: None,
         };
         let s = snippet(&c);
         assert!(s.starts_with("Jobs: Rust engineer Note : x word"), "{s}");

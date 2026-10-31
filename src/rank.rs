@@ -45,10 +45,14 @@ pub fn terms(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// The text a chunk is scored on: its headings plus its body, without link URLs.
+/// The text a chunk is scored on: its headings, its table's caption if it
+/// holds table rows, and its body without link URLs.
 pub fn scoring_text(chunk: &Chunk) -> String {
+    // A table's caption says what its numbers are; every part of a split
+    // table is scored with it.
+    let caption = chunk.table.as_deref().unwrap_or_default();
     format!(
-        "{}\n{}",
+        "{}\n{caption}\n{}",
         chunk.heading_path,
         LINK_URL.replace_all(&chunk.text, "]")
     )
@@ -320,6 +324,7 @@ mod tests {
             heading_path: heading.into(),
             text: text.into(),
             pdf_page: None,
+            table: None,
         }
     }
 

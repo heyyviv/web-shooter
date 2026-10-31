@@ -24,6 +24,10 @@ pub struct Chunk {
     pub text: String,
     /// PDF page the chunk starts on, from the `[p.N]` markers.
     pub pdf_page: Option<u32>,
+    /// Set when the chunk holds table rows: the table's caption (`Table 2:
+    /// …`), or empty if it has none. Shown with the passage and scored with
+    /// it, so every part of a split table carries what the table is about.
+    pub table: Option<String>,
 }
 
 /// Back-matter sections: citation lists that match many queries by accident
@@ -84,10 +88,18 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
     let mut repeat_header = false;
     // The last line with text, so a caption followed by a blank line still counts.
     let mut last_text = "";
+    // The last caption line not yet used by a table, the caption of the table
+    // being (or last) read, the first chunk that table can be in, and whether
+    // the table ended without one, so a caption under it is looked for.
+    let mut recent_caption: Option<&str> = None;
+    let mut caption: Option<String> = None;
+    let mut table_from = 0;
+    let mut caption_below = false;
 
     let flush = |buf: &mut String,
                  headings: &[(usize, String)],
                  pdf_page: Option<u32>,
+                 caption: Option<&str>,
                  chunks: &mut Vec<Chunk>| {
         let text = buf.trim();
         if text.is_empty() || headings.iter().any(|(_, h)| is_back_matter(h)) {
@@ -99,6 +111,10 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
             .map(|(_, h)| h.as_str())
             .collect::<Vec<_>>()
             .join(" > ");
+        let table = text
+            .lines()
+            .any(|l| l.starts_with('|'))
+            .then(|| caption.unwrap_or_default().to_string());
         // Merge a small tail into the previous chunk when both sit under the same headings.
         if text.len() < MIN_BYTES
             && let Some(last) = chunks.last_mut()
@@ -106,6 +122,9 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
         {
             last.text.push('\n');
             last.text.push_str(text);
+            if last.table.is_none() {
+                last.table = table;
+            }
         } else {
             chunks.push(Chunk {
                 page,
@@ -113,6 +132,7 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
                 heading_path,
                 text: text.to_string(),
                 pdf_page,
+                table,
             });
         }
         buf.clear();
@@ -127,16 +147,41 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
             continue;
         }
         if !in_code && let Some((level, text)) = heading(line) {
-            flush(&mut buf, &headings, start_page, &mut chunks);
+            flush(
+                &mut buf,
+                &headings,
+                start_page,
+                caption.as_deref(),
+                &mut chunks,
+            );
             headings.retain(|(l, _)| *l < level);
             headings.push((level, text));
             continue;
         }
         if !in_code {
+            let text = !line.trim().is_empty() && !line.starts_with('|');
             if line.starts_with("| ---") && prev_line.starts_with('|') {
                 table_header = Some(format!("{prev_line}\n{line}\n"));
-            } else if !line.starts_with('|') {
-                table_header = None;
+                caption = recent_caption.take().map(str::to_string);
+                table_from = chunks.len();
+                caption_below = false;
+            } else if text && table_header.take().is_some() {
+                caption_below = caption.is_none();
+            }
+            if text && TABLE_CAPTION.is_match(line) {
+                recent_caption = Some(line);
+                // The caption under a table: give it to the table's chunks.
+                if std::mem::take(&mut caption_below) {
+                    caption = Some(line.to_string());
+                    for c in &mut chunks[table_from..] {
+                        if c.table.as_deref() == Some("") {
+                            c.table = Some(line.to_string());
+                        }
+                    }
+                }
+            } else if text {
+                recent_caption = None;
+                caption_below = false;
             }
         }
         if buf.trim().is_empty() {
@@ -156,13 +201,25 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
         if !line.trim().is_empty() {
             last_text = line;
         }
-        let caption = !in_code && TABLE_CAPTION.is_match(last_text) && buf.len() < TARGET_BYTES * 2;
-        if buf.len() >= TARGET_BYTES && (!in_code || buf.len() >= TARGET_BYTES * 3) && !caption {
-            flush(&mut buf, &headings, start_page, &mut chunks);
+        let keep = !in_code && TABLE_CAPTION.is_match(last_text) && buf.len() < TARGET_BYTES * 2;
+        if buf.len() >= TARGET_BYTES && (!in_code || buf.len() >= TARGET_BYTES * 3) && !keep {
+            flush(
+                &mut buf,
+                &headings,
+                start_page,
+                caption.as_deref(),
+                &mut chunks,
+            );
             repeat_header = table_header.is_some();
         }
     }
-    flush(&mut buf, &headings, start_page, &mut chunks);
+    flush(
+        &mut buf,
+        &headings,
+        start_page,
+        caption.as_deref(),
+        &mut chunks,
+    );
     chunks
 }
 
@@ -209,6 +266,48 @@ mod tests {
         let chunks = chunk(0, &md);
         let with_table = chunks.iter().find(|c| c.text.contains("| Big |")).unwrap();
         assert!(with_table.text.contains("Table 2: BLEU"), "{chunks:#?}");
+    }
+
+    #[test]
+    fn every_chunk_of_a_table_knows_its_caption() {
+        let rows: String = (0..80)
+            .map(|i| format!("| model {i:02} | {i}.5 |\n"))
+            .collect();
+        let table = format!("| Model | BLEU |\n| --- | --- |\n{rows}");
+        // Caption above the table, as in most papers.
+        let above = format!("## R\n\nTable 2: BLEU scores.\n\n{table}\nProse after.\n");
+        let chunks = chunk(0, &above);
+        let with_rows: Vec<&Chunk> = chunks
+            .iter()
+            .filter(|c| c.text.contains("| model"))
+            .collect();
+        assert!(with_rows.len() > 1);
+        assert!(
+            with_rows
+                .iter()
+                .all(|c| c.table.as_deref() == Some("Table 2: BLEU scores."))
+        );
+        // Caption below the table: given back to the chunks before it.
+        let below = format!("## R\n\n{table}\nTable 3: Ablations.\n\nProse after.\n");
+        let chunks = chunk(0, &below);
+        let with_rows: Vec<&Chunk> = chunks
+            .iter()
+            .filter(|c| c.text.contains("| model"))
+            .collect();
+        assert!(
+            with_rows
+                .iter()
+                .all(|c| c.table.as_deref() == Some("Table 3: Ablations.")),
+            "{chunks:#?}"
+        );
+        // Without a caption the chunk is still marked, and prose isn't.
+        let bare = chunk(0, &format!("## R\n\nIntro text.\n\n{table}"));
+        assert!(
+            bare.iter()
+                .filter(|c| c.text.contains("| model"))
+                .all(|c| c.table.as_deref() == Some(""))
+        );
+        assert!(chunk(0, "## R\n\nJust prose.\n")[0].table.is_none());
     }
 
     #[test]

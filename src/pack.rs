@@ -109,6 +109,29 @@ const OUTLINE_MAX: usize = 8;
 /// Passages scoring below `min_relative` × the best score are left out.
 ///
 /// Pages appear in order of their best passage; passages within a page are
+/// Longest caption shown in a passage header, in characters.
+const CAPTION_MAX: usize = 100;
+
+/// ` · table: Table 2: …` for a passage holding table rows: the caption,
+/// shortened, unless the passage already shows it; ` · table` then, or when
+/// the table has none. Empty for other passages.
+fn table_label(table: &Option<String>, text: &str) -> String {
+    match table.as_deref() {
+        None => String::new(),
+        Some(caption) if caption.is_empty() || text.contains(caption) => " · table".into(),
+        Some(caption) => {
+            let mut short: String = caption.chars().take(CAPTION_MAX).collect();
+            if short.len() < caption.len() {
+                if let Some(cut) = short.rfind(' ') {
+                    short.truncate(cut);
+                }
+                short.push('…');
+            }
+            format!(" · table: {short}")
+        }
+    }
+}
+
 /// in document order, with neighbours under the same headings merged.
 pub fn pack_passages(
     pages: &[PageOut],
@@ -143,7 +166,11 @@ pub fn pack_passages(
     // Greedy: take the best passages that still fit. Each may need its own header.
     let mut selected: Vec<usize> = Vec::new();
     for i in ranked {
-        let cost = estimate_tokens(&chunks[i].text) + estimate_tokens(&chunks[i].heading_path) + 6;
+        let label = table_label(&chunks[i].table, &chunks[i].text);
+        let cost = estimate_tokens(&chunks[i].text)
+            + estimate_tokens(&chunks[i].heading_path)
+            + estimate_tokens(&label)
+            + 6;
         if cost <= remaining {
             remaining -= cost;
             selected.push(i);
@@ -178,7 +205,7 @@ pub fn pack_passages(
         picked.sort_by_key(|&i| chunks[i].index);
 
         // Merge runs of neighbouring chunks under the same headings.
-        let mut groups: Vec<(String, Option<u32>, f32, String)> = Vec::new();
+        let mut groups: Vec<(String, Option<u32>, f32, String, Option<String>)> = Vec::new();
         let mut prev: Option<&Chunk> = None;
         for &i in picked.iter() {
             let c = &chunks[i];
@@ -190,19 +217,29 @@ pub fn pack_passages(
                     g.2 = g.2.max(relative);
                     g.3.push('\n');
                     g.3.push_str(&c.text);
+                    if g.4.is_none() {
+                        g.4 = c.table.clone();
+                    }
                 }
-                _ => groups.push((c.heading_path.clone(), c.pdf_page, relative, c.text.clone())),
+                _ => groups.push((
+                    c.heading_path.clone(),
+                    c.pdf_page,
+                    relative,
+                    c.text.clone(),
+                    c.table.clone(),
+                )),
             }
             prev = Some(c);
         }
-        for (heading, pdf_page, score, text) in groups {
+        for (heading, pdf_page, score, text, table) in groups {
             let heading = if heading.is_empty() {
                 "(top)"
             } else {
                 &heading
             };
             let page = pdf_page.map(|n| format!(" · p.{n}")).unwrap_or_default();
-            out.push_str(&format!("§ {heading}{page} · {score:.2}\n{text}\n"));
+            let table = table_label(&table, &text);
+            out.push_str(&format!("§ {heading}{page}{table} · {score:.2}\n{text}\n"));
         }
 
         // Point at other sections only when part of the page was left out.
@@ -303,7 +340,45 @@ mod tests {
             heading_path: heading.into(),
             text: text.into(),
             pdf_page: None,
+            table: None,
         }
+    }
+
+    #[test]
+    fn table_passages_are_labelled_with_their_caption() {
+        let mut c = chunk(
+            0,
+            0,
+            "Results",
+            "| Model | BLEU |\n| --- | --- |\n| Big | 28.4 |",
+        );
+        c.table = Some("Table 2: BLEU scores and training cost.".into());
+        let page = PageOut {
+            url: "https://example.com".into(),
+            title: None,
+            body: c.text.clone(),
+            ok: true,
+            links: Vec::new(),
+            canonical: None,
+        };
+        let out = pack_passages(&[page], &[c.clone()], &[1.0], 0.5, 500);
+        assert!(
+            out.contains(
+                "§ Results · table: Table 2: BLEU scores and training cost. · 1.00\n| Model"
+            ),
+            "{out}"
+        );
+        // A caption already in the passage isn't repeated.
+        assert_eq!(
+            table_label(
+                &c.table,
+                "Table 2: BLEU scores and training cost.\n| Model |"
+            ),
+            " · table"
+        );
+        assert_eq!(table_label(&None, "text"), "");
+        let long = Some(format!("Table 1: {}", "word ".repeat(40)));
+        assert!(table_label(&long, "").ends_with("…") && table_label(&long, "").len() < 120);
     }
 
     #[test]
