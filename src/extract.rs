@@ -52,8 +52,19 @@ const MAX_SHELL_DATA_CHARS: usize = 1 << 20;
 /// Turn a response into compact markdown. A PDF is converted page by page;
 /// JSON (an API response) is rendered record by record. HTML becomes its main content plus JSON-LD
 /// facts, plus the data embedded in its scripts when the HTML itself is an
-/// empty JavaScript shell.
+/// empty JavaScript shell. Invisible characters are removed from all of it.
 pub fn extract(url: &str, body: &[u8]) -> Extracted {
+    let mut out = extract_page(url, body);
+    out.markdown = strip_invisible(&out.markdown);
+    out.title = out.title.map(|t| strip_invisible(&t));
+    for link in &mut out.links {
+        link.text = strip_invisible(&link.text);
+        link.heading = strip_invisible(&link.heading);
+    }
+    out
+}
+
+fn extract_page(url: &str, body: &[u8]) -> Extracted {
     let parsed = Url::parse(url).ok();
     if pdf::is_pdf(body) {
         return match pdf::to_markdown(body) {
@@ -238,6 +249,20 @@ fn scan(body: &[u8]) -> (Embedded, Vec<u8>) {
             element_content_handlers: vec![
                 element!("math", |el| {
                     el.remove();
+                    Ok(())
+                }),
+                // Text a reader never sees is where prompt injections hide.
+                // `hidden="until-found"` is collapsed but searchable content.
+                element!("[hidden], [style], template, textarea", |el| {
+                    let hidden = el
+                        .get_attribute("hidden")
+                        .is_some_and(|h| h != "until-found");
+                    if hidden
+                        || matches!(el.tag_name().as_str(), "template" | "textarea")
+                        || el.get_attribute("style").is_some_and(|s| hides(&s))
+                    {
+                        el.remove();
+                    }
                     Ok(())
                 }),
                 // Icon fonts render words as glyphs ("place", "arrow_back");
@@ -514,6 +539,30 @@ fn clean_code_line(line: &str) -> String {
     out
 }
 
+/// Whether an inline style hides the element. `font-size:0` and `opacity:0`
+/// are left alone: layouts use them on visible parents and fade-ins.
+fn hides(style: &str) -> bool {
+    let style: String = style
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    style
+        .split(';')
+        .any(|d| d.starts_with("display:none") || d.starts_with("visibility:hidden"))
+}
+
+/// Characters that are invisible on screen but read by an LLM: Unicode tag
+/// characters (which spell out hidden ASCII), zero-width spaces and joiners
+/// outside scripts that need them, and bidi overrides that reorder text.
+fn is_invisible(c: char) -> bool {
+    matches!(c, '\u{E0000}'..='\u{E007F}' | '\u{200B}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+fn strip_invisible(s: &str) -> String {
+    s.chars().filter(|&c| !is_invisible(c)).collect()
+}
+
 /// Append a text chunk, separating text nodes with a space: adjacent inline
 /// elements (`<span>Title</span><span>London</span>`) would otherwise run together.
 fn push_text(buf: &mut String, chunk: &lol_html::html_content::TextChunk) {
@@ -674,6 +723,26 @@ mod tests {
         let md = extract("https://x.org/", html).markdown;
         assert!(md.contains("Google Bengaluru, Karnataka, India"), "{md}");
         assert!(!md.contains("place") && !md.contains("arrow"), "{md}");
+    }
+
+    #[test]
+    fn hidden_text_and_invisible_characters_are_dropped() {
+        let html = "<html><body><main><h1>Post</h1><p>Visible text that stays.</p>
+            <div hidden>H1 secret</div><div hidden=\"until-found\">Collapsed section stays.</div>
+            <div style=\"color:red; Display: None\">H2 secret</div>
+            <p style=\"visibility:hidden\">H3 secret</p><p style=\"font-size:14px\">Styled text stays.</p>
+            <template><p>H4 secret</p></template><textarea>H5 secret</textarea>
+            <p>Tags\u{E0049}\u{E0047}\u{E004E} a\u{200B}b \u{202E}x</p></main></body></html>";
+        let md = extract("https://x.org/", html.as_bytes()).markdown;
+        assert!(!md.contains("secret"), "{md}");
+        for kept in [
+            "Visible text",
+            "Collapsed section",
+            "Styled text",
+            "Tags ab x",
+        ] {
+            assert!(md.contains(kept), "{kept}: {md}");
+        }
     }
 
     #[test]
