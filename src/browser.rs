@@ -64,6 +64,8 @@ const PROFILE_PREFIX: &str = "web-shooter-chrome-";
 pub struct Rendered {
     pub url: String,
     pub html: String,
+    /// HTTP status of the main document, when Chrome reports it.
+    pub status: Option<u16>,
 }
 
 /// The shared Chrome, started on demand.
@@ -364,10 +366,18 @@ async fn render_in_tab(browser: &Browser, url: &str) -> Result<Rendered, String>
     settle(&page).await;
     let html = page.content().await;
     let final_url = page.url().await.ok().flatten();
+    // 0 means Chrome doesn't know (e.g. a page served from cache).
+    let status = page
+        .evaluate("performance.getEntriesByType('navigation')[0]?.responseStatus ?? 0")
+        .await
+        .ok()
+        .and_then(|r| r.into_value::<u16>().ok())
+        .filter(|s| *s != 0);
     tab.close().await;
     Ok(Rendered {
         url: final_url.unwrap_or_else(|| url.to_string()),
         html: html.map_err(|e| format!("could not read the rendered page: {e}"))?,
+        status,
     })
 }
 

@@ -7,10 +7,10 @@ use crate::pdf::PAGE_MARKER;
 /// A chunk grows until it reaches this size, then a new one starts at the
 /// next line. About 200 tokens: big enough to carry context, small enough
 /// that a relevant chunk isn't mostly padding.
-const TARGET_BYTES: usize = 800;
+static TARGET_BYTES: LazyLock<usize> = LazyLock::new(|| crate::exp::get("tb", 800.0) as usize);
 
 /// A trailing chunk smaller than this is merged into the one before it.
-const MIN_BYTES: usize = 160;
+static MIN_BYTES: LazyLock<usize> = LazyLock::new(|| crate::exp::get("mb", 160.0) as usize);
 
 /// A passage of one page, under the headings that contain it.
 #[derive(Debug, Clone)]
@@ -116,7 +116,7 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
             .any(|l| l.starts_with('|'))
             .then(|| caption.unwrap_or_default().to_string());
         // Merge a small tail into the previous chunk when both sit under the same headings.
-        if text.len() < MIN_BYTES
+        if text.len() < *MIN_BYTES
             && let Some(last) = chunks.last_mut()
             && last.heading_path == heading_path
         {
@@ -201,8 +201,8 @@ pub fn chunk(page: usize, markdown: &str) -> Vec<Chunk> {
         if !line.trim().is_empty() {
             last_text = line;
         }
-        let keep = !in_code && TABLE_CAPTION.is_match(last_text) && buf.len() < TARGET_BYTES * 2;
-        if buf.len() >= TARGET_BYTES && (!in_code || buf.len() >= TARGET_BYTES * 3) && !keep {
+        let keep = !in_code && TABLE_CAPTION.is_match(last_text) && buf.len() < *TARGET_BYTES * 2;
+        if buf.len() >= *TARGET_BYTES && (!in_code || buf.len() >= *TARGET_BYTES * 3) && !keep {
             flush(
                 &mut buf,
                 &headings,

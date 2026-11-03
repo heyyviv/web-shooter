@@ -327,5 +327,441 @@
     "expect": [
       "| Risk Management Strategy | GV.RM |"
     ]
+  },
+  {
+    "name": "mdn-preflight-cache",
+    "urls": [
+      "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS"
+    ],
+    "query": "how long can the browser cache a preflight response",
+    "expect": [
+      "how long the response to the preflight request can be cached"
+    ]
+  },
+  {
+    "name": "mdn-credentials-wildcard",
+    "urls": [
+      "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS"
+    ],
+    "query": "can I allow any origin when sending cookies",
+    "expect": [
+      "Credentialed requests and wildcards"
+    ]
+  },
+  {
+    "name": "py-lru-default",
+    "urls": [
+      "https://docs.python.org/3/library/functools.html"
+    ],
+    "query": "default size of lru_cache",
+    "expect": [
+      "maxsize=128"
+    ]
+  },
+  {
+    "name": "py-reduce",
+    "urls": [
+      "https://docs.python.org/3/library/functools.html"
+    ],
+    "query": "fold a list into one value from left to right",
+    "expect": [
+      "((((1+2)+3)+4)+5)"
+    ]
+  },
+  {
+    "name": "py-overload-by-type",
+    "urls": [
+      "https://docs.python.org/3/library/functools.html"
+    ],
+    "query": "overload a function based on the type of its argument",
+    "expect": [
+      "To define a generic function"
+    ]
+  },
+  {
+    "name": "rust-string-freed",
+    "urls": [
+      "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html"
+    ],
+    "query": "when is a String's heap memory returned",
+    "expect": [
+      "Rust calls `drop` automatically"
+    ]
+  },
+  {
+    "name": "rust-copy-types",
+    "urls": [
+      "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html"
+    ],
+    "query": "which types implement Copy",
+    "expect": [
+      "All the integer types"
+    ]
+  },
+  {
+    "name": "pg-no-write-lock",
+    "urls": [
+      "https://www.postgresql.org/docs/current/sql-createindex.html"
+    ],
+    "query": "build an index without blocking inserts and updates",
+    "expect": [
+      "two scans of the table"
+    ]
+  },
+  {
+    "name": "pg-fillfactor",
+    "urls": [
+      "https://www.postgresql.org/docs/current/sql-createindex.html"
+    ],
+    "query": "how full are b-tree leaf pages packed during an index build",
+    "expect": [
+      "leaf pages are filled to this percentage"
+    ]
+  },
+  {
+    "name": "sqlite-max-columns",
+    "urls": [
+      "https://www.sqlite.org/lang_createtable.html"
+    ],
+    "query": "maximum number of columns in a table",
+    "expect": [
+      "SQLITE\\_MAX\\_COLUMN"
+    ]
+  },
+  {
+    "name": "sqlite-not-null",
+    "urls": [
+      "https://www.sqlite.org/lang_createtable.html"
+    ],
+    "query": "can NOT NULL be declared as a table constraint",
+    "expect": [
+      "may only be attached to a column definition"
+    ]
+  },
+  {
+    "name": "rg-macos",
+    "urls": [
+      "https://github.com/BurntSushi/ripgrep"
+    ],
+    "query": "install ripgrep on a mac",
+    "expect": [
+      "brew install ripgrep"
+    ]
+  },
+  {
+    "name": "rg-lookaround",
+    "urls": [
+      "https://github.com/BurntSushi/ripgrep"
+    ],
+    "query": "does ripgrep support look-around and backreferences",
+    "expect": [
+      "PCRE2"
+    ]
+  },
+  {
+    "name": "fowler-conway",
+    "urls": [
+      "https://martinfowler.com/articles/microservices.html"
+    ],
+    "query": "how team structure shapes the systems an organisation builds",
+    "expect": [
+      "Melvin Conway, 1968"
+    ]
+  },
+  {
+    "name": "fowler-messaging",
+    "urls": [
+      "https://martinfowler.com/articles/microservices.html"
+    ],
+    "query": "should services talk through an enterprise service bus",
+    "expect": [
+      "decoupled and as\ncohesive as possible"
+    ]
+  },
+  {
+    "name": "wage-over-21",
+    "urls": [
+      "https://www.gov.uk/national-minimum-wage-rates"
+    ],
+    "query": "minimum wage for people aged 21 and over from April 2026",
+    "expect": [
+      "£12.71"
+    ]
+  },
+  {
+    "name": "wage-apprentice",
+    "urls": [
+      "https://www.gov.uk/national-minimum-wage-rates"
+    ],
+    "query": "who can be paid the apprentice rate",
+    "expect": [
+      "in the first year of their apprenticeship"
+    ]
+  },
+  {
+    "name": "k8s-localhost",
+    "urls": [
+      "https://kubernetes.io/docs/concepts/workloads/pods/"
+    ],
+    "query": "how do containers in the same pod talk to each other",
+    "expect": [
+      "communicate with one another using `localhost`"
+    ]
+  },
+  {
+    "name": "k8s-static",
+    "urls": [
+      "https://kubernetes.io/docs/concepts/workloads/pods/"
+    ],
+    "query": "pods run by the kubelet without the API server",
+    "expect": [
+      "managed directly by the kubelet daemon"
+    ]
+  },
+  {
+    "name": "k8s-scale",
+    "urls": [
+      "https://kubernetes.io/docs/concepts/workloads/pods/"
+    ],
+    "query": "run several copies of a pod for more capacity",
+    "expect": [
+      "multiple replicas"
+    ]
+  },
+  {
+    "name": "nhs-see-gp",
+    "urls": [
+      "https://www.nhs.uk/conditions/flu/"
+    ],
+    "query": "when should I see a doctor about flu that isn't getting better",
+    "expect": [
+      "do not improve after 7 days"
+    ]
+  },
+  {
+    "name": "nhs-antibiotics",
+    "urls": [
+      "https://www.nhs.uk/conditions/flu/"
+    ],
+    "query": "will antibiotics help me recover from flu",
+    "expect": [
+      "Antibiotics do not work for viral infections"
+    ]
+  },
+  {
+    "name": "nhs-risk",
+    "urls": [
+      "https://www.nhs.uk/conditions/flu/"
+    ],
+    "query": "who should get urgent help for flu symptoms",
+    "expect": [
+      "65 or over"
+    ]
+  },
+  {
+    "name": "photo-efficiency",
+    "urls": [
+      "https://en.wikipedia.org/wiki/Photosynthesis"
+    ],
+    "query": "what share of light energy do plants turn into chemical energy",
+    "expect": [
+      "3–6%"
+    ]
+  },
+  {
+    "name": "photo-dry",
+    "urls": [
+      "https://en.wikipedia.org/wiki/Photosynthesis"
+    ],
+    "query": "what happens to photosynthesis when it is hot and dry",
+    "expect": [
+      "close their [stomata]"
+    ]
+  },
+  {
+    "name": "eiffel-height",
+    "urls": [
+      "https://en.wikipedia.org/wiki/Eiffel_Tower"
+    ],
+    "query": "how tall is the Eiffel Tower",
+    "expect": [
+      "1,083 ft"
+    ]
+  },
+  {
+    "name": "eiffel-engineer",
+    "urls": [
+      "https://en.wikipedia.org/wiki/Eiffel_Tower"
+    ],
+    "query": "who designed the tower's structure",
+    "expect": [
+      "Maurice Koechlin"
+    ]
+  },
+  {
+    "name": "eiffel-protest",
+    "urls": [
+      "https://en.wikipedia.org/wiki/Eiffel_Tower"
+    ],
+    "query": "did artists object to building the tower",
+    "expect": [
+      "objected on artistic ground"
+    ]
+  },
+  {
+    "name": "oauth-code-lifetime",
+    "urls": [
+      "https://www.rfc-editor.org/rfc/rfc6749.html"
+    ],
+    "query": "how long should an authorization code stay valid",
+    "expect": [
+      "10 minutes"
+    ]
+  },
+  {
+    "name": "oauth-tls",
+    "urls": [
+      "https://www.rfc-editor.org/rfc/rfc6749.html"
+    ],
+    "query": "which TLS version should be used",
+    "expect": [
+      "TLS version 1.2"
+    ]
+  },
+  {
+    "name": "w2v-softmax",
+    "urls": [
+      "https://arxiv.org/pdf/1301.3781"
+    ],
+    "query": "how is the vocabulary stored for hierarchical softmax",
+    "expect": [
+      "Huffman binary tree"
+    ]
+  },
+  {
+    "name": "w2v-cbow-cost",
+    "urls": [
+      "https://arxiv.org/pdf/1301.3781"
+    ],
+    "query": "training complexity of the CBOW model",
+    "expect": [
+      "Q = N × D + D × log_2(V )"
+    ]
+  },
+  {
+    "name": "adam-defaults",
+    "urls": [
+      "https://arxiv.org/pdf/1412.6980"
+    ],
+    "query": "recommended default hyperparameters",
+    "expect": [
+      "β_2 = 0.999"
+    ]
+  },
+  {
+    "name": "adam-bias",
+    "urls": [
+      "https://arxiv.org/pdf/1412.6980"
+    ],
+    "query": "why are the moment estimates biased early in training",
+    "expect": [
+      "biased towards zero"
+    ]
+  },
+  {
+    "name": "go-indent",
+    "urls": [
+      "https://go.dev/doc/effective_go"
+    ],
+    "query": "tabs or spaces in Go code",
+    "expect": [
+      "We use tabs for indentation"
+    ]
+  },
+  {
+    "name": "go-cleanup",
+    "urls": [
+      "https://go.dev/doc/effective_go"
+    ],
+    "query": "run cleanup code right before a function returns",
+    "expect": [
+      "schedules a function call"
+    ]
+  },
+  {
+    "name": "go-channel-buffer",
+    "urls": [
+      "https://go.dev/doc/effective_go"
+    ],
+    "query": "default buffer size of a channel",
+    "expect": [
+      "The default is zero"
+    ]
+  },
+  {
+    "name": "multi-channel-buffer",
+    "urls": [
+      "https://kubernetes.io/docs/concepts/workloads/pods/",
+      "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS",
+      "https://go.dev/doc/effective_go"
+    ],
+    "query": "default buffer size of a channel",
+    "expect": [
+      "The default is zero"
+    ]
+  },
+  {
+    "name": "multi-rust-drop",
+    "urls": [
+      "https://docs.python.org/3/library/functools.html",
+      "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html",
+      "https://go.dev/doc/effective_go"
+    ],
+    "query": "when is a String's heap memory returned in Rust",
+    "expect": [
+      "Rust calls `drop` automatically"
+    ]
+  },
+  {
+    "name": "multi-wage-18",
+    "urls": [
+      "https://www.nhs.uk/conditions/flu/",
+      "https://www.gov.uk/national-minimum-wage-rates",
+      "https://martinfowler.com/articles/microservices.html"
+    ],
+    "query": "minimum hourly pay for 18 to 20 year olds",
+    "expect": [
+      "£10.85"
+    ]
+  },
+  {
+    "name": "hindu-head-office",
+    "urls": [
+      "https://www.thehindu.com/"
+    ],
+    "query": "where is The Hindu's head office",
+    "expect": [
+      "Anna Salai"
+    ]
+  },
+  {
+    "name": "substack-ai-share",
+    "urls": [
+      "https://lindac.substack.com/p/ai-is-a-bigger-problem-on-medium"
+    ],
+    "query": "what share of internet content is AI generated",
+    "expect": [
+      "57%"
+    ]
+  },
+  {
+    "name": "para-substack-why-less-ai",
+    "urls": [
+      "https://lindac.substack.com/p/ai-is-a-bigger-problem-on-medium"
+    ],
+    "query": "why is AI writing less of a problem on Substack than on Medium",
+    "expect": [
+      "all you can eat buffet"
+    ]
   }
 ]

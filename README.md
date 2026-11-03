@@ -21,10 +21,9 @@ Faster, and about **23× fewer tokens**, with the same accuracy. Caveats and the
 
 | Tool | Use it when | Returns |
 | --- | --- | --- |
-| `fetch(urls, query?, keywords?, max_tokens?)` | You have URLs (or local PDF paths) | The best passages, grouped by page; whole pages without a query |
+| `fetch(urls, query?, keywords?, max_tokens?)` | You have URLs (or local PDF paths) | The best passages, grouped by page; whole pages without a query. Pages built by JavaScript are loaded in headless Chrome automatically |
 | `links(url, query?, keywords?, max_links?)` | You want to choose which page to read next | The page's links, ranked by the query |
 | `crawl(url, query, keywords?, max_pages?, max_depth?, other_sites?, max_results?)` | You have a start page and a goal, not the URLs | The most relevant pages, as URLs with one-line snippets |
-| `render(urls, query?, keywords?, max_tokens?)` | `fetch` finds no content: the page is built by JavaScript | Like `fetch`, after loading the page in headless Chrome |
 
 ## Setup
 
@@ -56,7 +55,7 @@ Then run `/mcp` or start a new session. For Claude Desktop, Cursor and other cli
 { "mcpServers": { "web-shooter": { "command": "/absolute/path/to/web-shooter" } } }
 ```
 
-The first query downloads a 30 MB embedding model. `render` needs Chrome installed.
+The first query downloads a 30 MB embedding model. Pages built by JavaScript need Chrome installed.
 
 ## More
 
