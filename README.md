@@ -61,6 +61,8 @@ The first query downloads a 30 MB embedding model. Pages built by JavaScript nee
 
 [docs/guide.md](docs/guide.md) covers usage, configuration, updating, limits and development. [docs/how-it-works.md](docs/how-it-works.md) explains the internals.
 
+- MCP Registry name: `mcp-name: io.github.heyyviv/web-shooter`
+
 ## License
 
 Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.

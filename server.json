@@ -1,0 +1,16 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.heyyviv/web-shooter",
+  "title": "web-shooter",
+  "description": "Fast, low-token web reader and focused crawler. Returns ranked passages, not whole pages.",
+  "repository": { "url": "https://github.com/heyyviv/web-shooter", "source": "github" },
+  "version": "0.2.0",
+  "packages": [
+    {
+      "registryType": "cargo",
+      "identifier": "web-shooter",
+      "version": "0.2.0",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}

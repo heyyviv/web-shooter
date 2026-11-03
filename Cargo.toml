@@ -1,6 +1,6 @@
 [package]
 name = "web-shooter"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Fast, low-token web reader and focused crawler for AI assistants, served over MCP"
@@ -10,7 +10,7 @@ homepage = "https://github.com/heyyviv/web-shooter"
 readme = "README.md"
 keywords = ["mcp", "crawler", "scraper", "llm", "search"]
 categories = ["command-line-utilities", "web-programming", "text-processing"]
-exclude = ["/eval/snapshots", "/CLAUDE.md", "/.github"]
+exclude = ["/eval/snapshots", "/CLAUDE.md", "/.github", "/server.json"]
 
 [dependencies]
 anyhow = "1.0.104"
