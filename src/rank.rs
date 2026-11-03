@@ -9,7 +9,7 @@ use rust_stemmers::{Algorithm, Stemmer};
 
 use crate::{
     chunk::{Chunk, MD_LINK},
-    embed, rerank,
+    embed, exp, rerank,
 };
 
 /// BM25 term-frequency saturation and length normalisation (standard values).
@@ -41,7 +41,13 @@ pub fn terms(text: &str) -> Vec<String> {
     words
         .into_iter()
         .filter(|w| !STOPWORDS.contains(&w.as_str()))
-        .map(|w| STEMMER.stem(&w).into_owned())
+        .map(|w| {
+            if exp::get("stem", 1.0) > 0.0 {
+                STEMMER.stem(&w).into_owned()
+            } else {
+                w
+            }
+        })
         .collect()
 }
 
@@ -61,36 +67,100 @@ pub fn scoring_text(chunk: &Chunk) -> String {
 /// BM25 score of every chunk for the query. The chunks of all pages in the
 /// call form the corpus, so scores are comparable across pages.
 pub fn bm25(query: &str, chunks: &[Chunk]) -> Vec<f32> {
-    let mut query_terms = terms(query);
+    let ordered = terms(query);
+    let mut query_terms = ordered.clone();
     query_terms.sort();
     query_terms.dedup();
     if query_terms.is_empty() || chunks.is_empty() {
         return vec![0.0; chunks.len()];
     }
 
-    let docs: Vec<Vec<String>> = chunks.iter().map(|c| terms(&scoring_text(c))).collect();
+    // Experiment: heading terms counted `hw` times (a BM25F-style field weight).
+    let hw = exp::get("hw", 1.0).max(1.0) as usize;
+    let docs: Vec<Vec<String>> = chunks
+        .iter()
+        .map(|c| {
+            let mut d = terms(&scoring_text(c));
+            let h = terms(&c.heading_path);
+            for _ in 1..hw {
+                d.extend(h.iter().cloned());
+            }
+            d
+        })
+        .collect();
+    let weighted: Vec<(String, f32)> = query_terms.iter().map(|q| (q.clone(), 1.0)).collect();
+    let mut scores = bm25_core(&weighted, &docs);
+
+    // Experiment: RM3-style pseudo-relevance feedback.
+    let prf = exp::get("prf", 0.0) as usize;
+    if prf > 0 {
+        let prfk = exp::get("prfk", 3.0) as usize;
+        let prfw = exp::get("prfw", 0.3);
+        let mut order: Vec<usize> = (0..docs.len()).filter(|&i| scores[i] > 0.0).collect();
+        order.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]));
+        let mut weight: HashMap<&str, f32> = HashMap::new();
+        for &i in order.iter().take(prfk) {
+            for t in &docs[i] {
+                if t.len() > 2 && !query_terms.contains(t) {
+                    *weight.entry(t).or_default() += scores[i] / docs[i].len().max(1) as f32;
+                }
+            }
+        }
+        let mut extra: Vec<(&str, f32)> = weight.into_iter().collect();
+        extra.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let mut expanded = weighted.clone();
+        expanded.extend(extra.iter().take(prf).map(|(t, _)| (t.to_string(), prfw)));
+        scores = bm25_core(&expanded, &docs);
+    }
+
+    // Experiment: bonus for consecutive query terms found near each other.
+    let prox = exp::get("prox", 0.0);
+    if prox > 0.0 && ordered.len() > 1 {
+        let window = exp::get("proxw", 4.0) as usize;
+        for (doc, score) in docs.iter().zip(scores.iter_mut()) {
+            let mut bonus = 0.0;
+            for pair in ordered.windows(2) {
+                let pa: Vec<usize> = (0..doc.len()).filter(|&i| doc[i] == pair[0]).collect();
+                let near = pa.iter().any(|&i| {
+                    let lo = i.saturating_sub(window);
+                    let hi = (i + window + 1).min(doc.len());
+                    doc[lo..hi].contains(&pair[1])
+                });
+                if near {
+                    bonus += 1.0;
+                }
+            }
+            *score += prox * bonus;
+        }
+    }
+    scores
+}
+
+fn bm25_core(query_terms: &[(String, f32)], docs: &[Vec<String>]) -> Vec<f32> {
+    let (k1, b, delta) = (exp::get("k1", K1), exp::get("b", B), exp::get("delta", 0.0));
     let n = docs.len() as f32;
     let avg_len = docs.iter().map(Vec::len).sum::<usize>() as f32 / n;
 
-    let idf: HashMap<&str, f32> = query_terms
+    let idf: Vec<f32> = query_terms
         .iter()
-        .map(|q| {
+        .map(|(q, _)| {
             let df = docs.iter().filter(|d| d.contains(q)).count() as f32;
-            (q.as_str(), ((n - df + 0.5) / (df + 0.5) + 1.0).ln())
+            ((n - df + 0.5) / (df + 0.5) + 1.0).ln()
         })
         .collect();
 
     docs.iter()
         .map(|doc| {
-            let len_norm = 1.0 - B + B * doc.len() as f32 / avg_len.max(1.0);
+            let len_norm = 1.0 - b + b * doc.len() as f32 / avg_len.max(1.0);
             query_terms
                 .iter()
-                .map(|q| {
+                .zip(&idf)
+                .map(|((q, w), idf)| {
                     let tf = doc.iter().filter(|t| *t == q).count() as f32;
                     if tf == 0.0 {
                         return 0.0;
                     }
-                    idf[q.as_str()] * tf * (K1 + 1.0) / (tf + K1 * len_norm)
+                    w * idf * (tf * (k1 + 1.0) / (tf + k1 * len_norm) + delta)
                 })
                 .sum()
         })
@@ -165,14 +235,22 @@ pub struct Ranked {
 /// Full ranking: BM25 and embeddings fused, then the best candidates
 /// rescored by the cross-encoder. Chunks that weren't reranked score 0.
 pub fn rank(query: &str, chunks: &[Chunk], models: Models, config: RankConfig) -> Ranked {
-    let fused: Vec<f32> = hybrid(query, chunks, models.embedder, config.fusion)
-        .into_iter()
-        .zip(chunks)
-        .map(|(s, c)| s * shape_factor(c, config))
+    let raw = hybrid(query, chunks, models.embedder, config.fusion);
+    // Experiment: add `nb` times the better neighbour's score (same page).
+    let nb = exp::get("nb", 0.0);
+    let near = |i: usize, j: Option<usize>| {
+        j.filter(|&j| j < chunks.len() && chunks[j].page == chunks[i].page)
+            .map_or(0.0, |j| raw[j])
+    };
+    let fused: Vec<f32> = (0..chunks.len())
+        .map(|i| {
+            let s = raw[i] + nb * near(i, i.checked_sub(1)).max(near(i, Some(i + 1)));
+            s * shape_factor(&chunks[i], config)
+        })
         .collect();
     let fallback = |scores| Ranked {
         scores,
-        min_relative: config.min_relative,
+        min_relative: exp::get("cut", config.min_relative),
     };
     let Some(reranker) = models.reranker.filter(|_| config.rerank_top > 0) else {
         return fallback(fused);
@@ -211,8 +289,43 @@ pub fn hybrid(
     let Some(model) = model else {
         return lexical;
     };
-    let texts: Vec<String> = chunks.iter().map(scoring_text).collect();
+    let texts: Vec<String> = if exp::get("dh", 1.0) > 0.0 {
+        chunks.iter().map(scoring_text).collect()
+    } else {
+        chunks
+            .iter()
+            .map(|c| LINK_URL.replace_all(&c.text, "]").into_owned())
+            .collect()
+    };
     let dense = embed::similarities(model, query, &texts);
+    let fusion = match exp::get("fu", -1.0) as i32 {
+        1 => Fusion::Rrf {
+            k: exp::get("rrfk", 60.0),
+        },
+        0 => Fusion::Weighted {
+            bm25_weight: exp::get("bw", 0.3),
+        },
+        2 | 3 => {
+            let bw = exp::get("bw", 0.3);
+            let norm = if exp::get("fu", 0.0) as i32 == 2 {
+                z_score
+            } else {
+                rank_pct
+            };
+            let (l, d) = (norm(&lexical), norm(&dense));
+            return l
+                .iter()
+                .zip(&d)
+                .map(|(l, d)| bw * l + (1.0 - bw) * d)
+                .collect();
+        }
+        _ => match fusion {
+            Fusion::Weighted { .. } if exp::get("bw", -1.0) >= 0.0 => Fusion::Weighted {
+                bm25_weight: exp::get("bw", 0.3),
+            },
+            f => f,
+        },
+    };
     match fusion {
         Fusion::Rrf { k } => {
             let mut fused = vec![0.0; chunks.len()];
@@ -235,6 +348,38 @@ pub fn hybrid(
                 .collect()
         }
     }
+}
+
+/// Experiment: z-scores clipped below at 0, scaled to 0..1.
+fn z_score(scores: &[f32]) -> Vec<f32> {
+    let n = scores.len().max(1) as f32;
+    let mean = scores.iter().sum::<f32>() / n;
+    let sd = (scores.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / n).sqrt();
+    if sd <= f32::EPSILON {
+        return min_max(scores);
+    }
+    min_max(
+        &scores
+            .iter()
+            .map(|s| ((s - mean) / sd).max(0.0))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Experiment: 1 for the best score down to 0 for the worst, by rank.
+fn rank_pct(scores: &[f32]) -> Vec<f32> {
+    let n = scores.len();
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]));
+    let mut out = vec![0.0; n];
+    for (r, i) in order.into_iter().enumerate() {
+        out[i] = if scores[i] > 0.0 {
+            1.0 - r as f32 / n as f32
+        } else {
+            0.0
+        };
+    }
+    out
 }
 
 /// Relevance of each text to the query on a fixed 0..1 scale, so scores from
@@ -381,7 +526,10 @@ mod tests {
             eprintln!("skipped: embedding model unavailable");
             return;
         };
-        let chunks = [c("", "Rust was first released in 2015 by Mozilla Research.")];
+        let chunks = [c(
+            "",
+            "Rust was first released in 2015 by Mozilla Research.",
+        )];
         let scores = hybrid(
             "when was rust released",
             &chunks,

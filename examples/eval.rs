@@ -44,6 +44,7 @@ struct Case {
 struct Outcome {
     found: bool,
     top: bool,
+    rr: f32,
     tokens: usize,
     ms: f64,
     out: String,
@@ -102,6 +103,24 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let outcomes = run_all(&cases, &pages, models, RankConfig::default());
+    if has("--summary") {
+        // Study: one line, with the original 32 cases and the 40 added on 2026-11-02 apart.
+        let split = outcomes.len().min(32);
+        let misses: Vec<&str> = cases
+            .iter()
+            .zip(&outcomes)
+            .filter(|(_, o)| !o.top)
+            .map(|(c, _)| c.name.as_str())
+            .collect();
+        println!(
+            "{} | first32 {} | rest {}\n  not top: {}",
+            summary(&outcomes),
+            summary(&outcomes[..split]),
+            summary(&outcomes[split..]),
+            misses.join(" ")
+        );
+        return Ok(());
+    }
     println!(
         "{:<26} {:>5} {:>4} {:>7} {:>6}",
         "case", "found", "top", "tokens", "ms"
@@ -185,6 +204,7 @@ fn run_all(
             Outcome {
                 found: case.expect.iter().all(|e| out.contains(e.as_str())),
                 top: best_passage(&out).contains(case.expect[0].as_str()),
+                rr: reciprocal_rank(&out, &case.expect[0]),
                 tokens: estimate_tokens(&out),
                 ms,
                 out,
@@ -199,8 +219,9 @@ fn summary(outcomes: &[Outcome]) -> String {
     let top = outcomes.iter().filter(|o| o.top).count();
     let tokens = outcomes.iter().map(|o| o.tokens).sum::<usize>() / n;
     let ms = outcomes.iter().map(|o| o.ms).sum::<f64>() / n as f64;
+    let mrr = outcomes.iter().map(|o| o.rr).sum::<f32>() / n as f32;
     format!(
-        "found {found}/{n} · top {top}/{n} · avg {tokens} tokens · avg {ms:.1} ms",
+        "found {found}/{n} · top {top}/{n} · mrr {mrr:.3} · avg {tokens} tokens · avg {ms:.1} ms",
         n = outcomes.len()
     )
 }
@@ -211,6 +232,16 @@ fn best_passage(out: &str) -> &str {
         .skip(1)
         .max_by(|a, b| score_of(a).total_cmp(&score_of(b)))
         .unwrap_or("")
+}
+
+/// 1 / position of the first passage, by score, that contains `expect`; 0 if none does.
+fn reciprocal_rank(out: &str, expect: &str) -> f32 {
+    let mut blocks: Vec<&str> = out.split("\n§ ").skip(1).collect();
+    blocks.sort_by(|a, b| score_of(b).total_cmp(&score_of(a)));
+    blocks
+        .iter()
+        .position(|b| b.contains(expect))
+        .map_or(0.0, |p| 1.0 / (p + 1) as f32)
 }
 
 fn score_of(block: &str) -> f32 {

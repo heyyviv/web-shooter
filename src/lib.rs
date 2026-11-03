@@ -2,6 +2,7 @@ pub mod browser;
 pub mod chunk;
 pub mod data;
 pub mod embed;
+pub mod exp;
 pub mod extract;
 pub mod fetcher;
 pub mod links;
