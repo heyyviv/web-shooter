@@ -24,6 +24,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use spider::reqwest::Client;
 use web_shooter::{
+    browser::Chrome,
     fetcher,
     models::ModelSet,
     pack::estimate_tokens,
@@ -69,6 +70,8 @@ async fn main() -> anyhow::Result<()> {
 
     let models = ModelSet::default();
     models.wait(false).await;
+    // `fetch` loads JavaScript-built pages in Chrome; closed below to delete its profile.
+    let chrome = Chrome::default();
 
     // Whole-page tools: fetch each distinct URL once per tool.
     let mut urls: Vec<&String> = cases.iter().flat_map(|c| &c.urls).collect();
@@ -114,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
         };
         let client = fetcher::build_client()?;
         let t = Instant::now();
-        let out = fetch::run(&client, &models, params).await;
+        let out = fetch::run(&client, &chrome, &models, params).await;
         let mut row = vec![Run {
             ms: ms(t),
             tokens: estimate_tokens(&out),
@@ -163,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
             col.len() - ok.len()
         );
     }
+    chrome.close().await;
     Ok(())
 }
 

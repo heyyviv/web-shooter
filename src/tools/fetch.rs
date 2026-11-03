@@ -4,14 +4,15 @@ use serde::Deserialize;
 use spider::reqwest::Client;
 
 use crate::{
-    chunk::{Chunk, chunk},
+    browser::Chrome,
+    chunk::{Chunk, MD_LINK, chunk},
     extract::extract,
     fetcher,
     models::ModelSet,
     pack::{PageOut, pack, pack_passages},
     pdf,
     rank::{self, Models, RankConfig},
-    tools::query_text,
+    tools::{query_text, render},
 };
 
 /// Default token budget for one `fetch` call.
@@ -35,9 +36,14 @@ pub struct FetchParams {
     pub precise: Option<bool>,
 }
 
-pub async fn run(client: &Client, models: &ModelSet, params: FetchParams) -> String {
+pub async fn run(
+    client: &Client,
+    chrome: &Chrome,
+    models: &ModelSet,
+    params: FetchParams,
+) -> String {
     let pages: Vec<PageOut> = stream::iter(params.urls.clone())
-        .map(|url| async move { fetch_one(client, &url).await })
+        .map(|url| async move { read(client, chrome, &url).await })
         .buffered(CONCURRENCY)
         .collect()
         .await;
@@ -98,6 +104,48 @@ pub fn respond(
     )
 }
 
+/// Download a page, and load it in Chrome instead when the download has no
+/// content or only links: its scripts build the content after loading.
+async fn read(client: &Client, chrome: &Chrome, url: &str) -> PageOut {
+    let page = fetch_one(client, url).await;
+    let needs_browser = if page.ok {
+        is_thin(&page.body)
+    } else {
+        page.body == NO_CONTENT
+    };
+    if !needs_browser || fetcher::local_path(url).is_some() {
+        return page;
+    }
+    let rendered = render::render_one(chrome, url).await;
+    // Twice the text, so a small JSON or PDF isn't swapped for Chrome's view of it.
+    let better = rendered.ok
+        && (!page.ok || text_outside_links(&rendered.body) > 2 * text_outside_links(&page.body));
+    if better {
+        rendered
+    } else if page.ok {
+        page
+    } else {
+        PageOut::error(
+            rendered.url,
+            format!("{NO_CONTENT}, and in Chrome: {}", rendered.body),
+        )
+    }
+}
+
+/// Little text, nearly all of it links. Amazon's job search: 2,161 letters
+/// and digits, 337 outside links. Hacker News (365 outside, 7,095 in all) is not thin.
+fn is_thin(markdown: &str) -> bool {
+    alnum(markdown) < 3000 && text_outside_links(markdown) < 500
+}
+
+fn text_outside_links(markdown: &str) -> usize {
+    alnum(&MD_LINK.replace_all(markdown, ""))
+}
+
+fn alnum(s: &str) -> usize {
+    s.chars().filter(|c| c.is_alphanumeric()).count()
+}
+
 pub async fn fetch_one(client: &Client, url: &str) -> PageOut {
     if let Some(path) = fetcher::local_path(url) {
         return read_local(path).await;
@@ -106,6 +154,10 @@ pub async fn fetch_one(client: &Client, url: &str) -> PageOut {
     if fetched.too_large {
         let mb = fetcher::MAX_BYTES >> 20;
         return PageOut::error(fetched.url, format!("larger than {mb} MB, not downloaded"));
+    }
+    // AWS WAF (IMDb) answers a bot check with 202 and a challenge script.
+    if fetched.status == 202 {
+        return PageOut::error(fetched.url, BLOCKED);
     }
     if !(200..300).contains(&fetched.status) {
         return PageOut::error(fetched.url, format!("HTTP {}", fetched.status));
@@ -144,6 +196,11 @@ async fn read_local(path: std::path::PathBuf) -> PageOut {
 /// Wrap an extraction result as a page, turning empty or failed ones into errors.
 pub fn page_out(url: String, extracted: Option<crate::extract::Extracted>) -> PageOut {
     match extracted {
+        // A bot check or login wall is reported, not returned as the page's content.
+        Some(e) if is_bot_check(e.title.as_deref().unwrap_or_default(), &e.markdown) => {
+            PageOut::error(url, BLOCKED)
+        }
+        Some(_) if is_login_page(&url) => PageOut::error(url, "redirected to a login page"),
         Some(e) if !e.markdown.is_empty() => PageOut {
             url,
             title: e.title,
@@ -153,10 +210,112 @@ pub fn page_out(url: String, extracted: Option<crate::extract::Extracted>) -> Pa
             canonical: e.canonical,
         },
         Some(e) if e.error.is_some() => PageOut::error(url, e.error.unwrap_or_default()),
-        Some(_) => PageOut::error(
-            url,
-            "no readable content (the page may need JavaScript: try `render`)",
-        ),
+        Some(_) => PageOut::error(url, NO_CONTENT),
         None => PageOut::error(url, "extraction failed"),
+    }
+}
+
+const NO_CONTENT: &str = "no readable content";
+
+pub const BLOCKED: &str = "blocked by a bot check; web-shooter doesn't get past these";
+
+/// A bot-check interstitial (Cloudflare, Reddit, Google and similar) instead of the page.
+fn is_bot_check(title: &str, markdown: &str) -> bool {
+    let title = title.to_lowercase();
+    let text = markdown.to_lowercase();
+    title.starts_with("just a moment")
+        || title.starts_with("attention required")
+        || (markdown.len() < 2000
+            && [
+                "verify you are human",
+                "performing security verification",
+                "checking your browser",
+                "prove your humanity",
+                "unusual traffic from your computer network",
+            ]
+            .iter()
+            .any(|p| text.contains(p)))
+}
+
+/// The page ended up on a sign-in form (after redirects), e.g. old.reddit's `/login/?dest=…`.
+fn is_login_page(url: &str) -> bool {
+    let path = spider::url::Url::parse(url)
+        .map(|u| u.path().to_lowercase())
+        .unwrap_or_default();
+    ["/login", "/signin", "/sign-in", "/accounts/login"]
+        .iter()
+        .any(|p| path == *p || path.starts_with(&format!("{p}/")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bot_check_pages_are_recognised() {
+        assert!(is_bot_check(
+            "Just a moment...",
+            "This website uses a security service."
+        ));
+        assert!(is_bot_check(
+            "jobs",
+            "Performing security verification\nRay ID: 1"
+        ));
+        assert!(is_bot_check(
+            "Reddit - Prove your humanity",
+            "# Prove your humanity\nComplete the challenge below."
+        ));
+        assert!(is_bot_check(
+            "",
+            "Our systems have detected unusual traffic from your computer network."
+        ));
+        assert!(!is_bot_check(
+            "Software Engineer",
+            &"Build secure systems. ".repeat(200)
+        ));
+    }
+
+    #[test]
+    fn thin_pages_are_mostly_links() {
+        let link = "* [Software Engineer II](https://example.com/jobs/1)\n";
+        assert!(is_thin(&link.repeat(40)));
+        assert!(!is_thin(&"A real sentence about the job and its team. ".repeat(20)));
+        // A long list of links (Hacker News) is the page's content, not a shell.
+        assert!(!is_thin(&link.repeat(200)));
+    }
+
+    #[test]
+    fn login_redirects_are_recognised() {
+        assert!(is_login_page(
+            "https://old.reddit.com/login/?reason=lor2&dest=https%3A%2F%2Fold.reddit.com%2Fr%2Fx"
+        ));
+        assert!(is_login_page("https://example.com/accounts/login"));
+        assert!(!is_login_page("https://example.com/blog/login-tips"));
+        assert!(!is_login_page("https://example.com/"));
+    }
+
+    #[test]
+    fn pages_without_words_are_empty() {
+        let read = |html: &str| {
+            let url = "https://example.com/";
+            page_out(
+                url.into(),
+                Some(crate::extract::extract(url, html.as_bytes())),
+            )
+        };
+        for html in [
+            "<html><head><title>Reddit</title></head><body>Reddit<script>var a=1</script></body></html>",
+            "<html><head><title>Google Search</title></head><body><div>13, 8, 13</div><div>0, 1</div></body></html>",
+        ] {
+            let page = read(html);
+            assert!(
+                !page.ok && page.body.contains("no readable content"),
+                "{}",
+                page.body
+            );
+        }
+        assert!(
+            read("<html><head><title>Hi</title></head><body><p>Short page.</p></body></html>").ok
+        );
     }
 }

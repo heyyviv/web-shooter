@@ -139,9 +139,18 @@ fn extract_page(url: &str, body: &[u8]) -> Extracted {
         // alongside the real data, often earlier in the page. Without a
         // query, the start of the page is what gets returned.
         blobs.sort_by_key(|b| std::cmp::Reverse(prose_chars(b)));
+        // Blobs without a single sentence are numbers and settings (Google's
+        // `13, 8, 13…`, Reddit's feature flags), not the page's content.
+        blobs.retain(|b| prose_chars(b) > 0);
         let page_data = blobs.join("\n\n");
         if !page_data.trim().is_empty() {
             markdown = format!("{markdown}\n\n{}", page_data.trim());
+        }
+        // No words beyond the title: nothing to read (Google's script-built
+        // results leave only numbers, Reddit's proof-of-work page only its title).
+        let title = embedded.title.as_deref().unwrap_or_default();
+        if !markdown.replace(title, "").chars().any(char::is_alphabetic) {
+            markdown.clear();
         }
     }
 

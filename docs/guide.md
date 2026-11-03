@@ -26,7 +26,7 @@ work through the examples that illustrate them:
 
 `crawl` respects robots.txt, stays on the start site by default, fetches 4 pages at a time and stops after 30 pages or 30 seconds by default.
 
-`render` needs Chrome (or Chromium, Edge, Brave) installed; nothing is downloaded. Chrome starts on the first `render` call, runs with a fresh temporary profile that is deleted when it closes, and closes after 2 idle minutes. It reads only http(s) pages.
+When a downloaded page has no readable content, or only links and menus, `fetch` loads it in Chrome instead. That needs Chrome (or Chromium, Edge, Brave) installed; nothing is downloaded. Chrome starts the first time a page needs it, runs with a fresh temporary profile that is deleted when it closes, and closes after 2 idle minutes. It reads only http(s) pages.
 
 ## Usage
 
@@ -41,7 +41,6 @@ Tips:
 - Pass several URLs to one `fetch` call; they are fetched in parallel.
 - Add `keywords` with exact terms or synonyms when the answer may not share words with the question (a city name, a product code).
 - `crawl` returns URLs and snippets, not page text. Follow up with `fetch` on the pages you want.
-- When `fetch` reports no readable content, try `render`.
 
 ## Configuration
 
@@ -50,7 +49,7 @@ Tips:
 | `WEB_SHOOTER_EMBED_MODEL` | A different model2vec embedding model (Hugging Face repo id or local folder) |
 | `WEB_SHOOTER_RERANK_MODEL` | A different reranker for `precise` (only with `--features rerank`): `bge-base`, `bge-m3` or `jina-turbo` |
 | `HF_HOME` | Where models are cached (default `~/.cache/huggingface`) |
-| `WEB_SHOOTER_CHROME` | The Chrome or Chromium executable `render` uses (default: found in the usual install locations) |
+| `WEB_SHOOTER_CHROME` | The Chrome or Chromium executable `fetch` uses for JavaScript pages (default: found in the usual install locations) |
 
 ## First run
 
@@ -81,8 +80,8 @@ rm -rf ~/.cache/huggingface/hub/models--minishlab--potion-base-8M \
 
 ## What it can't read yet
 
-- Sites behind bot checks such as Cloudflare: `render` reports them as blocked; web-shooter doesn't get past them.
-- Content behind clicks: "load more" buttons, infinite scroll, pagination, logins. `render` loads and waits but doesn't click or scroll.
+- Sites behind bot checks such as Cloudflare: `fetch` reports them as blocked; web-shooter doesn't get past them.
+- Content behind clicks: "load more" buttons, infinite scroll, pagination, logins. Chrome loads and waits but doesn't click or scroll.
 - Scanned PDFs (images with no text layer) need OCR, which web-shooter doesn't do; `fetch` says so.
 - Complex tables (stacked headers, two tables side by side) come out imperfectly; equations come out as plain text in reading order.
 
