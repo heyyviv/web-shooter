@@ -10,7 +10,7 @@ homepage = "https://github.com/heyyviv/web-shooter"
 readme = "README.md"
 keywords = ["mcp", "crawler", "scraper", "llm", "search"]
 categories = ["command-line-utilities", "web-programming", "text-processing"]
-exclude = ["/eval/snapshots", "/CLAUDE.md", "/.github", "/server.json"]
+exclude = ["/eval/snapshots", "/CLAUDE.md", "/.github", "/server.json", "/glama.json"]
 
 [dependencies]
 anyhow = "1.0.104"
